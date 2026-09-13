@@ -1,0 +1,31 @@
+# Gradle
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+app/build/
+
+# Keystore
+*.jks
+*.keystore
+
+# APK outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+
+# Sandbox artifacts
+app-debug.apk
+SelfModAgent-debug.apk

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="scripts" path="scripts/" />
+    <files-path name="plugins" path="plugins/" />
+    <files-path name="repos" path="repos/" />
+</paths>

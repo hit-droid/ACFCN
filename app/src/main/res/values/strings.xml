@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">SelfMod Agent</string>
+    <string name="tab_chat">智能体</string>
+    <string name="tab_scripts">脚本</string>
+    <string name="tab_plugins">插件</string>
+    <string name="tab_config">配置</string>
+</resources>
