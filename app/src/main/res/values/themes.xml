@@ -1,7 +1,16 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.SelfModAgent" parent="android:Theme.Material.NoActionBar">
+    <!--
+        Compose + Material3 必须使用 AndroidX MaterialComponents 主题作为 parent。
+        原生 android:Theme.Material.* 在 Android 10 上会因缺少 Compose 需要的属性而崩溃。
+    -->
+    <style name="Theme.SelfModAgent" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:windowBackground">@color/bg_dark</item>
         <item name="android:statusBarColor">@color/bg_dark</item>
         <item name="android:navigationBarColor">@color/bg_dark</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
+        <item name="colorPrimary">@color/accent_blue</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
     </style>
 </resources>
