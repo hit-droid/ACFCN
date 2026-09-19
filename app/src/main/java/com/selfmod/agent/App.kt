@@ -1,6 +1,7 @@
 package com.selfmod.agent
 
 import android.app.Application
+import android.util.Log
 import com.selfmod.agent.agent.AgentCore
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.plugin.PluginRegistry
@@ -16,10 +17,16 @@ import java.io.File
 /** A structured event pushed from agent/scripts/tools to the UI layer. */
 data class UiEvent(val action: String, val payload: String)
 
+private const val TAG = "SelfModAgent"
+
 /**
  * Application-wide singletons. Wiring everything here (rather than a DI
  * framework) keeps the codebase small and easy to read — the whole point of
  * the app is "everything visible and editable".
+ *
+ * IMPORTANT: must be referenced from AndroidManifest via android:name=".App"
+ * — otherwise Android creates a plain Application and AgentViewModel's
+ * `application as App` cast throws ClassCastException on startup.
  */
 class App : Application() {
     lateinit var settings: SettingsStore
@@ -39,6 +46,12 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        runCatching { initAll() }.onFailure {
+            Log.e(TAG, "App init FAILED — app will start but features may be broken", it)
+        }
+    }
+
+    private fun initAll() {
         val files = filesDir
         settings = SettingsStore(this)
         repo = CodeRepository(
@@ -69,6 +82,7 @@ class App : Application() {
             plugins = plugins,
             uiNotifier = uiNotifier,
         )
+        Log.i(TAG, "App initialized OK")
     }
 
     fun uiNotifier(): (String, String) -> Unit = uiNotifier
