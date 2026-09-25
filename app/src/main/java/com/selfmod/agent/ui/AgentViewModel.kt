@@ -383,7 +383,16 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             streamBuffer.clear()
             streamBuffer.append(text)
-            _trace.value = cur + TraceEntry(System.currentTimeMillis(), "stream", "流式", text)
+            _trace.value = cur + TraceEntry(System.currentTimeMillis(), "stream", "", text)
+        }
+    }
+
+    /** Removes a trailing live-stream bubble whose text equals the final message. */
+    private fun dropRedundantStream(finalText: String) {
+        val cur = _trace.value
+        val last = cur.lastOrNull() ?: return
+        if (last.kind == "stream" && last.body.trim() == finalText.trim()) {
+            _trace.value = cur.dropLast(1)
         }
     }
 
@@ -395,15 +404,17 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         return when (this) {
             AgentStep.Started -> TraceEntry(System.currentTimeMillis(), "started", "开始", "")
             is AgentStep.Thought -> {
+                dropRedundantStream(text)
                 streamBuffer.clear()
                 TraceEntry(System.currentTimeMillis(), "thought", "思考", text)
             }
             is AgentStep.Action -> {
                 streamBuffer.clear()
-                TraceEntry(System.currentTimeMillis(), "action", "行动: $tool", args)
+                TraceEntry(System.currentTimeMillis(), "action", tool, args)
             }
             is AgentStep.Observation -> TraceEntry(System.currentTimeMillis(), "observation", "观察", result)
             is AgentStep.Answer -> {
+                dropRedundantStream(text)
                 streamBuffer.clear()
                 TraceEntry(System.currentTimeMillis(), "answer", "答复", text)
             }

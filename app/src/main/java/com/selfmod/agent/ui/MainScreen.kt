@@ -1,5 +1,6 @@
 package com.selfmod.agent.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +44,14 @@ private val tabs = listOf(
 fun MainScreen(vm: AgentViewModel) {
     var tab by rememberSaveable { mutableStateOf(0) }
     val showOnboarding by vm.showOnboarding.collectAsState()
+    val browser = vm.browser()
+    val browserVisible = tab == 1
+
+    // Physical back: on the browser tab, go back in history first.
+    BackHandler(enabled = browserVisible) {
+        if (!browser.consumeHistoryBack()) tab = 0
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -65,10 +74,14 @@ fun MainScreen(vm: AgentViewModel) {
                     onDismiss = { vm.dismissOnboarding() },
                 )
             }
-            if (tab == 1) BrowserChrome(vm)
+            if (browserVisible) BrowserChrome(vm)
+
             Box(Modifier.weight(1f).fillMaxSize()) {
-                PersistentWebView(vm, visible = true)
-                if (tab != 1) {
+                // The shared WebView stays composed for its whole lifetime so the
+                // agent can drive it from any tab. It is only *shown* on the
+                // browser tab; otherwise the other screens cover it opaquely.
+                PersistentWebView(vm, visible = browserVisible)
+                if (!browserVisible) {
                     Box(Modifier.fillMaxSize().background(BgDark)) {
                         when (tab) {
                             0 -> AgentScreen(vm)

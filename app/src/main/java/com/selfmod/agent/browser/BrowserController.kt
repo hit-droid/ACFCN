@@ -45,6 +45,16 @@ class BrowserController(
     private val _desktop = MutableStateFlow(false)
     val desktop: StateFlow<Boolean> = _desktop.asStateFlow()
 
+    private val _history = MutableStateFlow<List<String>>(emptyList())
+    val history: StateFlow<List<String>> = _history.asStateFlow()
+
+    private val _canBack = MutableStateFlow(false)
+    val canBack: StateFlow<Boolean> = _canBack.asStateFlow()
+
+    private val _agentPointer = MutableStateFlow<Pair<Int, Int>?>(null)
+    /** Last element the agent clicked: (index, x, y) for on-page highlight. */
+    val agentPointer: StateFlow<Pair<Int, Int>?> = _agentPointer.asStateFlow()
+
     @Volatile private var webView: WebView? = null
     private val pageLatch = AtomicReference<CountDownLatch?>(null)
 
@@ -68,12 +78,18 @@ class BrowserController(
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 _url.value = url
                 _loading.value = true
+                _canBack.value = view.canGoBack()
+                if (url.startsWith("http")) {
+                    _history.value = (listOf(url) + _history.value.filter { it != url }).take(50)
+                }
             }
             override fun onPageFinished(view: WebView, url: String) {
                 _url.value = url
                 _loading.value = false
                 _progress.value = 100
+                _canBack.value = view.canGoBack()
                 pageLatch.getAndSet(null)?.countDown()
+                injectAgentOverlay()
             }
         }
         wv.webChromeClient = object : WebChromeClient() {
@@ -85,10 +101,44 @@ class BrowserController(
                 _loading.value = newProgress < 100
             }
         }
+        wv.setDownloadListener { url, _, _, _, _ ->
+            runCatching {
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                intent.setData(android.net.Uri.parse(url))
+                wv.context.startActivity(intent)
+            }
+        }
         if (_url.value == "about:blank" || _url.value.isBlank()) {
             wv.loadUrl(HOME)
         }
     }
+
+    /** Draws a small pulsing marker where the agent last acted. */
+    private fun injectAgentOverlay() {
+        runCatching {
+            eval(
+                """
+                (function(){
+                  if (document.getElementById('__acfcn_overlay')) return 'ok';
+                  var d=document.createElement('div');
+                  d.id='__acfcn_overlay';
+                  d.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #4F8EF7;border-radius:6px;box-shadow:0 0 0 3px rgba(79,142,247,.25);transition:all .2s;display:none';
+                  document.body.appendChild(d);
+                  window.__acfcnMark=function(el){
+                    if(!el){d.style.display='none';return;}
+                    var r=el.getBoundingClientRect();
+                    d.style.display='block';
+                    d.style.left=(r.left-2)+'px';d.style.top=(r.top-2)+'px';
+                    d.style.width=r.width+'px';d.style.height=r.height+'px';
+                  };
+                  return 'ok';
+                })()
+                """.trimIndent(),
+            )
+        }
+    }
+
+    fun goHome(): String = navigate(HOME)
 
     fun detach(wv: WebView) {
         if (webView === wv) webView = null
@@ -131,6 +181,20 @@ class BrowserController(
         if (!isMain()) Thread.sleep(400)
         return "back url=${_url.value} title=${_title.value}"
     }
+
+    /** Returns true if the WebView handled the back press (i.e. there was history). */
+    fun consumeHistoryBack(): Boolean {
+        val can = onMainSync { webView?.canGoBack() == true }
+        if (can) {
+            onMain { webView?.goBack() }
+            return true
+        }
+        return false
+    }
+
+    fun canGoBack(): Boolean = onMainSync { webView?.canGoBack() == true }
+
+    fun canGoForward(): Boolean = onMainSync { webView?.canGoForward() == true }
 
     fun goForward(): String {
         onMainSync {
@@ -178,6 +242,7 @@ class BrowserController(
             (function(){
               var el=document.querySelector('[data-agent-id="$index"]');
               if(!el) return 'not found: $index';
+              try { if (window.__acfcnMark) window.__acfcnMark(el); } catch(e){}
               el.focus();
               el.click();
               return 'clicked #'+$index+' '+el.tagName;
