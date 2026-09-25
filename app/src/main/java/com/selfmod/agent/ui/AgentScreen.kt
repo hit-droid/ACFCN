@@ -18,7 +18,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -29,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -60,7 +61,12 @@ fun AgentScreen(vm: AgentViewModel) {
         if (trace.isNotEmpty()) listState.animateScrollToItem(trace.lastIndex)
     }
 
-    val cfg = remember { vm.config() }
+    val offline by vm.offlineMode.collectAsState()
+    val cfg = vm.config()
+    val endpointHint = when {
+        offline || cfg.isLocalHost() -> "离线 · ${cfg.model.ifEmpty { "(未配置)" }}"
+        else -> "云端 · ${cfg.model.ifEmpty { "(未配置)" }}"
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -69,12 +75,12 @@ fun AgentScreen(vm: AgentViewModel) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    "SelfMod Agent",
+                    "ACFCN",
                     color = TextPrimary,
                     style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    "模型: ${cfg.model.ifEmpty { "(未配置)" }}",
+                    endpointHint,
                     color = TextSecondary,
                     fontSize = 12.sp,
                 )
@@ -83,6 +89,13 @@ fun AgentScreen(vm: AgentViewModel) {
                 Icon(Icons.Filled.Clear, contentDescription = "清空")
                 Spacer(Modifier.width(4.dp))
                 Text("清空")
+            }
+            if (!busy) {
+                TextButton(onClick = { vm.retryLast() }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "重试")
+                    Spacer(Modifier.width(4.dp))
+                    Text("重试")
+                }
             }
         }
         androidx.compose.material3.HorizontalDivider(color = SurfaceVariant, thickness = 1.dp)
@@ -110,12 +123,21 @@ fun AgentScreen(vm: AgentViewModel) {
                 enabled = !busy,
             )
             Spacer(Modifier.width(8.dp))
-            FilledIconButton(
-                onClick = { vm.send() },
-                enabled = !busy && input.isNotBlank(),
-                modifier = Modifier.size(48.dp),
-            ) {
-                Icon(Icons.Filled.Send, contentDescription = "发送")
+            if (busy) {
+                FilledIconButton(
+                    onClick = { vm.stop() },
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Filled.Stop, contentDescription = "停止")
+                }
+            } else {
+                FilledIconButton(
+                    onClick = { vm.send() },
+                    enabled = input.isNotBlank(),
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(Icons.Filled.Send, contentDescription = "发送")
+                }
             }
         }
     }
@@ -131,6 +153,7 @@ private fun TraceCard(e: TraceEntry) {
         "action" -> AccentGreen.copy(alpha = 0.16f)
         "observation" -> AccentAmber.copy(alpha = 0.12f)
         "ui" -> AccentPurple.copy(alpha = 0.16f)
+        "stream" -> AccentBlue.copy(alpha = 0.10f)
         else -> SurfaceVariant
     }
     val onColor = when (e.kind) {
@@ -139,6 +162,7 @@ private fun TraceCard(e: TraceEntry) {
         "action" -> AccentGreen
         "observation" -> AccentAmber
         "ui" -> AccentPurple
+        "stream" -> AccentBlue
         else -> TextSecondary
     }
     Column(

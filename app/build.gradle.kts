@@ -12,8 +12,8 @@ android {
         applicationId = "com.selfmod.agent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -54,6 +54,7 @@ dependencies {
     implementation(libs.rhino)
     implementation(libs.okhttp)
     implementation(libs.coroutines.android)
+    implementation(libs.security.crypto)
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.test:core:1.5.0")

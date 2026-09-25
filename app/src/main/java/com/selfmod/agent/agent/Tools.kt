@@ -1,6 +1,8 @@
 package com.selfmod.agent.agent
 
+import com.selfmod.agent.browser.BrowserController
 import com.selfmod.agent.llm.ToolSpec
+import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.plugin.PluginRegistry
 import com.selfmod.agent.repo.CodeRepository
 import com.selfmod.agent.script.ScriptApi
@@ -23,6 +25,8 @@ object Tools {
         plugins: PluginRegistry,
         settings: SettingsStore,
         uiNotifier: (String, String) -> Unit,
+        browser: BrowserController,
+        models: LocalModelStore,
     ): List<ToolDef> = listOf(
         executeJs(scriptEngine, scriptHost),
         readScript(repo),
@@ -42,6 +46,16 @@ object Tools {
         httpGet(scriptHost),
         httpPost(scriptHost),
         uiNotify(uiNotifier),
+        browserOpen(browser),
+        browserSnapshot(browser),
+        browserClick(browser),
+        browserType(browser),
+        browserExtract(browser),
+        browserScroll(browser),
+        browserEval(browser),
+        browserBack(browser),
+        listLocalModels(models),
+        offlineStatus(settings),
     )
 
     // ----------------------------------------------------------------- JS
@@ -54,14 +68,18 @@ object Tools {
         ),
         run = { args ->
             val o = JSONObject(args)
-            val code = o.getString("code")
-            val name = o.optString("name", "agent.js")
-            val res = engine.run(code, host, name)
-            val out = JSONObject()
-            out.put("value", res.value?.toString() ?: "null")
-            out.put("logs", res.logs.joinToString("\n").take(2000))
-            out.put("error", res.error ?: JSONObject.NULL)
-            out.toString()
+            val code = o.optString("code").ifBlank { o.optString("input") }
+            if (code.isBlank()) {
+                ToolRegistry.errJson("code required")
+            } else {
+                val name = o.optString("name", "agent.js")
+                val res = engine.run(code, host, name)
+                val out = JSONObject()
+                out.put("value", res.value?.toString() ?: "null")
+                out.put("logs", res.logs.joinToString("\n").take(2000))
+                out.put("error", res.error ?: JSONObject.NULL)
+                out.toString()
+            }
         },
     )
 
@@ -322,6 +340,139 @@ object Tools {
             val payload = o.optString("payload", "{}")
             notifier(action, payload)
             ToolRegistry.okJson("sent", mapOf("action" to action))
+        },
+    )
+
+    // ----------------------------------------------------------- browser
+
+    private fun browserOpen(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_open",
+            description = "Navigate the in-app browser to a URL or search query. User and agent share the same WebView.",
+            parameters = """{"type":"object","properties":{"url":{"type":"string","description":"URL or search query"}},"required":["url"]}""",
+        ),
+        run = { args ->
+            val url = JSONObject(args).optString("url").ifBlank {
+                JSONObject(args).optString("input")
+            }
+            if (url.isBlank()) ToolRegistry.errJson("url required")
+            else browser.navigate(url)
+        },
+    )
+
+    private fun browserSnapshot(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_snapshot",
+            description = "Take a snapshot of the current page: URL, title, readable text, and numbered interactive elements. Use the index with browser_click / browser_type.",
+            parameters = """{"type":"object","properties":{}}""",
+        ),
+        run = { browser.snapshot() },
+    )
+
+    private fun browserClick(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_click",
+            description = "Click an interactive element by its snapshot index.",
+            parameters = """{"type":"object","properties":{"index":{"type":"integer"}},"required":["index"]}""",
+        ),
+        run = { args ->
+            val o = JSONObject(args)
+            val idx = if (o.has("index")) o.getInt("index") else o.optInt("input", -1)
+            if (idx < 0) ToolRegistry.errJson("index required") else browser.click(idx)
+        },
+    )
+
+    private fun browserType(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_type",
+            description = "Type text into an input/textarea identified by snapshot index.",
+            parameters = """{"type":"object","properties":{"index":{"type":"integer"},"text":{"type":"string"}},"required":["index","text"]}""",
+        ),
+        run = { args ->
+            val o = JSONObject(args)
+            browser.type(o.getInt("index"), o.optString("text"))
+        },
+    )
+
+    private fun browserExtract(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_extract",
+            description = "Extract visible text of the current page.",
+            parameters = """{"type":"object","properties":{}}""",
+        ),
+        run = { browser.extractText() },
+    )
+
+    private fun browserScroll(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_scroll",
+            description = "Scroll the page. direction is down, up, or top.",
+            parameters = """{"type":"object","properties":{"direction":{"type":"string"}},"required":[]}""",
+        ),
+        run = { args ->
+            val dir = JSONObject(args).optString("direction", "down")
+            browser.scroll(dir.ifBlank { "down" })
+        },
+    )
+
+    private fun browserEval(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_eval",
+            description = "Run JavaScript in the current page and return the result.",
+            parameters = """{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}""",
+        ),
+        run = { args ->
+            val o = JSONObject(args)
+            val code = o.optString("code").ifBlank { o.optString("input") }
+            browser.evalJs(code)
+        },
+    )
+
+    private fun browserBack(browser: BrowserController) = ToolDef(
+        spec = ToolSpec(
+            name = "browser_back",
+            description = "Go back in the in-app browser history.",
+            parameters = """{"type":"object","properties":{}}""",
+        ),
+        run = { browser.goBack() },
+    )
+
+    private fun listLocalModels(models: LocalModelStore) = ToolDef(
+        spec = ToolSpec(
+            name = "list_local_models",
+            description = "List GGUF/ONNX models the user imported for offline use.",
+            parameters = """{"type":"object","properties":{}}""",
+        ),
+        run = {
+            val arr = JSONArray()
+            models.list().forEach { m ->
+                arr.put(JSONObject().apply {
+                    put("id", m.id); put("name", m.name)
+                    put("format", m.format); put("size", m.sizeLabel())
+                    put("architecture", m.architecture); put("quant", m.quant)
+                    put("context", m.contextLength); put("summary", m.summary)
+                })
+            }
+            arr.toString()
+        },
+    )
+
+    private fun offlineStatus(settings: SettingsStore) = ToolDef(
+        spec = ToolSpec(
+            name = "offline_status",
+            description = "Report whether offline mode is on and which LLM endpoint is active.",
+            parameters = """{"type":"object","properties":{}}""",
+        ),
+        run = {
+            val cfg = settings.llmConfig()
+            JSONObject().apply {
+                put("offline_mode", settings.offlineMode())
+                put("kind", cfg.kind)
+                put("baseUrl", cfg.baseUrl)
+                put("model", cfg.model)
+                put("local", cfg.isLocalHost())
+                put("usable", cfg.isUsable())
+            }.toString()
         },
     )
 }

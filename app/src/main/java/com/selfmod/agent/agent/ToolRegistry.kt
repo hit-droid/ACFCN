@@ -20,8 +20,15 @@ class ToolRegistry {
     fun invoke(name: String, argsJson: String): String {
         val t = tools[name]
             ?: return errJson("unknown tool: $name")
-        return runCatching { t.run(argsJson) }
+        return runCatching { t.run(coerceArgs(argsJson)) }
             .getOrElse { errJson("tool error: ${it.message ?: it.toString()}") }
+    }
+
+    private fun coerceArgs(raw: String): String {
+        val t = raw.trim()
+        if (t.isEmpty()) return "{}"
+        if (t.startsWith("{") || t.startsWith("[")) return t
+        return JSONObject().put("input", t).put("url", t).put("code", t).toString()
     }
 
     fun names(): List<String> = tools.keys.toList()

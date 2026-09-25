@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SelfModAgent"
+rootProject.name = "ACFCN"
 include(":app")

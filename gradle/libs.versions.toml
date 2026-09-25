@@ -9,6 +9,7 @@ rhino = "1.7.14"
 okhttp = "4.12.0"
 coroutines = "1.8.1"
 material = "1.7.0"
+securityCrypto = "1.0.0"
 
 [libraries]
 core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -25,6 +26,7 @@ compose-material-icons = { group = "androidx.compose.material", name = "material
 rhino = { group = "org.mozilla", name = "rhino", version.ref = "rhino" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
