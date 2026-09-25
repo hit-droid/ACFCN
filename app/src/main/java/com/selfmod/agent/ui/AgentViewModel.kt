@@ -330,28 +330,31 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun AgentStep.toTrace(): TraceEntry = when (this) {
-        AgentStep.Started -> TraceEntry(System.currentTimeMillis(), "started", "开始", "")
-        is AgentStep.Thought -> {
-            streamBuffer.clear()
-            TraceEntry(System.currentTimeMillis(), "thought", "思考", text)
-        }
-        is AgentStep.Action -> {
-            streamBuffer.clear()
-            TraceEntry(System.currentTimeMillis(), "action", "行动: $tool", args)
-        }
-        is AgentStep.Observation -> TraceEntry(System.currentTimeMillis(), "observation", "观察", result)
-        is AgentStep.Answer -> {
-            streamBuffer.clear()
-            TraceEntry(System.currentTimeMillis(), "answer", "答复", text)
-        }
-        is AgentStep.Error -> {
-            streamBuffer.clear()
-            TraceEntry(System.currentTimeMillis(), "error", "错误", message)
-        }
-        is AgentStep.StreamDelta -> {
+    private fun AgentStep.toTrace(): TraceEntry {
+        if (this is AgentStep.StreamDelta) {
             appendDelta(text)
             return TraceEntry(System.currentTimeMillis(), "delta", "", "")
+        }
+        return when (this) {
+            AgentStep.Started -> TraceEntry(System.currentTimeMillis(), "started", "开始", "")
+            is AgentStep.Thought -> {
+                streamBuffer.clear()
+                TraceEntry(System.currentTimeMillis(), "thought", "思考", text)
+            }
+            is AgentStep.Action -> {
+                streamBuffer.clear()
+                TraceEntry(System.currentTimeMillis(), "action", "行动: $tool", args)
+            }
+            is AgentStep.Observation -> TraceEntry(System.currentTimeMillis(), "observation", "观察", result)
+            is AgentStep.Answer -> {
+                streamBuffer.clear()
+                TraceEntry(System.currentTimeMillis(), "answer", "答复", text)
+            }
+            is AgentStep.Error -> {
+                streamBuffer.clear()
+                TraceEntry(System.currentTimeMillis(), "error", "错误", message)
+            }
+            is AgentStep.StreamDelta -> TraceEntry(System.currentTimeMillis(), "delta", "", "")
         }
     }
 }
