@@ -280,16 +280,29 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         if (_engineBusy.value) return
         viewModelScope.launch(Dispatchers.IO) {
             _engineBusy.value = true
-            _engineStatus.value = "正在准备模型文件…"
+            _engineStatus.value = "正在检查设备…"
             try {
                 app.engine.unload()
                 _engineReady.value = false
+
+                // Memory pre-flight: llama.cpp needs the weights plus KV cache/overhead.
+                val availableMb = availableHeapMb()
+                val neededMb = m.sizeBytes / (1024L * 1024L)
+                val estimateMb = neededMb + neededMb / 4 + 256
+                if (estimateMb > availableMb) {
+                    _engineStatus.value =
+                        "内存不足：该模型约需 ${estimateMb}MB，当前可用约 ${availableMb}MB。" +
+                            "建议换更小的量化模型（如 Q4_K_M 的 1.5B/3B）。"
+                    return@launch
+                }
+
+                _engineStatus.value = "正在准备模型文件…"
                 val file = app.models.materialize(m.id)
                     ?: run {
                         _engineStatus.value = "无法读取模型文件"
                         return@launch
                     }
-                _engineStatus.value = "正在加载到内存（首次较慢）…"
+                _engineStatus.value = "正在加载到内存（首次较慢，可能数十秒）…"
                 val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 8192) else 2048
                 val ok = app.engine.load(file, nCtx = ctx)
                 if (ok) {
@@ -307,7 +320,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     app.settings.setOfflineMode(true)
                     _offlineMode.value = true
                 } else {
-                    _engineStatus.value = "加载失败：设备或模型不支持（需 arm64 且内存足够）"
+                    _engineStatus.value = "加载失败：模型格式不支持或内存不足（需 arm64 设备）"
                 }
             } catch (e: Throwable) {
                 _engineStatus.value = "加载异常：${e.message}"
@@ -315,6 +328,20 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 _engineBusy.value = false
             }
         }
+    }
+
+    private fun availableHeapMb(): Long {
+        val rt = Runtime.getRuntime()
+        val maxMb = rt.maxMemory() / (1024L * 1024L)
+        val usedMb = (rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L)
+        val heapAvail = maxMb - usedMb
+        // Native model memory is outside the Java heap; use system memory as a hint too.
+        val info = android.app.ActivityManager.MemoryInfo()
+        val am = getApplication<android.app.Application>().getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        am.getMemoryInfo(info)
+        val sysAvailMb = info.availMem / (1024L * 1024L)
+        // We can use roughly a third of free system RAM safely for native weights.
+        return maxOf(heapAvail, sysAvailMb / 3)
     }
 
     fun unloadOnDevice() {

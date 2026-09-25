@@ -61,7 +61,7 @@ class LlmClient(
                 role to m.content
             }
         val sb = StringBuilder()
-        engine.chat(
+        val code = engine.chat(
             messages = pairs,
             maxTokens = config.maxTokens,
             temperature = config.temperature.toFloat(),
@@ -73,6 +73,15 @@ class LlmClient(
                 }
             },
         )
+        if (code < 0) {
+            throw LlmException(
+                502,
+                "端侧推理失败（code=$code）：可能模型格式不支持或内存不足。试试更小的量化模型。",
+            )
+        }
+        if (sb.isEmpty()) {
+            throw LlmException(502, "端侧模型没有产生任何输出，请检查模型文件是否完整。")
+        }
         return ChatResult(content = sb.toString(), raw = sb.toString(), finishReason = "stop")
     }
 
