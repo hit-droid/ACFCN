@@ -29,7 +29,13 @@ data class TraceEntry(
     val kind: String,
     val title: String,
     val body: String,
-)
+    val id: Long = nextId(),
+) {
+    companion object {
+        private val counter = java.util.concurrent.atomic.AtomicLong(0)
+        fun nextId(): Long = counter.incrementAndGet()
+    }
+}
 
 class AgentViewModel(application: Application) : AndroidViewModel(application) {
 

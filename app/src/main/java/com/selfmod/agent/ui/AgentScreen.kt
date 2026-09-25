@@ -101,7 +101,7 @@ fun AgentScreen(vm: AgentViewModel) {
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(trace, key = { it.ts.toString() + it.kind + it.body.hashCode() }) { entry ->
+                items(trace, key = { it.id }) { entry ->
                     ChatMessageRow(entry)
                 }
                 if (busy && trace.lastOrNull()?.kind != "stream") {
