@@ -47,6 +47,9 @@ fun OfflineScreen(vm: AgentViewModel) {
     val probing by vm.probing.collectAsState()
     val test by vm.testResult.collectAsState()
     val testing by vm.testing.collectAsState()
+    val engineStatus by vm.engineStatus.collectAsState()
+    val engineBusy by vm.engineBusy.collectAsState()
+    val engineReady by vm.engineReady.collectAsState()
     val cfg = vm.config()
     var note by remember { mutableStateOf<String?>(null) }
 
@@ -139,6 +142,28 @@ fun OfflineScreen(vm: AgentViewModel) {
         }
 
         Spacer(Modifier.height(4.dp))
+        Text("端侧推理（App 内直接跑）", color = TextPrimary, style = MaterialTheme.typography.titleSmall)
+        Text(
+            "把 GGUF 复制到 App 私有目录并用 llama.cpp 直接加载，无需任何外部服务。需 arm64 设备与足够内存。",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (engineReady) "● 端侧模型已加载" else "○ 未加载端侧模型",
+                color = if (engineReady) AccentGreen else TextSecondary,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(onClick = { vm.unloadOnDevice() }, enabled = engineReady && !engineBusy) {
+                Text("卸载")
+            }
+        }
+        if (engineStatus.isNotBlank()) {
+            Text(engineStatus, color = if (engineReady) AccentGreen else AccentAmber, fontSize = 12.sp)
+        }
+
+        Spacer(Modifier.height(4.dp))
         Text("已导入模型", color = TextPrimary, style = MaterialTheme.typography.titleSmall)
         Button(onClick = {
             picker.launch(arrayOf("*/*"))
@@ -158,10 +183,14 @@ fun OfflineScreen(vm: AgentViewModel) {
                         Text(m.summary, color = AccentBlue, fontSize = 12.sp)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { vm.loadOnDevice(m) },
+                            enabled = !engineBusy,
+                        ) { Text(if (engineBusy) "加载中…" else "在本机加载") }
                         OutlinedButton(onClick = {
                             vm.applyOfflineModel(m)
                             note = "已把模型名设为 ${m.name}，请确保本机服务已加载该文件"
-                        }) { Text("用作当前模型") }
+                        }) { Text("用作外部服务模型") }
                         OutlinedButton(onClick = {
                             vm.removeModel(m.id)
                             models = vm.localModels()

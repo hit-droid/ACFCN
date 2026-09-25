@@ -1,5 +1,6 @@
 package com.selfmod.agent.llm
 
+import com.selfmod.agent.offline.native.LocalLlmEngine
 import com.selfmod.agent.util.JsonUtil
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -11,6 +12,7 @@ import java.util.concurrent.TimeUnit
 
 class LlmClient(
     private val client: OkHttpClient = defaultClient(),
+    private val onDevice: LocalLlmEngine? = null,
 ) {
     private val json = "application/json; charset=utf-8".toMediaType()
 
@@ -21,6 +23,9 @@ class LlmClient(
         onDelta: ((String) -> Unit)? = null,
         cancelled: () -> Boolean = { false },
     ): ChatResult {
+        if (config.kind == LlmConfig.KIND_ONDEVICE) {
+            return chatOnDevice(config, messages, onDelta, cancelled)
+        }
         val useNative = tools.isNotEmpty() && config.supportsNativeTools
         val toolList = if (useNative) tools else emptyList()
         return try {
@@ -35,6 +40,40 @@ class LlmClient(
                 throw e
             }
         }
+    }
+
+    private fun chatOnDevice(
+        config: LlmConfig,
+        messages: List<ChatMessage>,
+        onDelta: ((String) -> Unit)?,
+        cancelled: () -> Boolean,
+    ): ChatResult {
+        val engine = onDevice ?: throw LlmException(503, "端侧推理引擎不可用")
+        if (!engine.isLoaded()) throw LlmException(503, "端侧模型未加载，请在离线页加载模型")
+        val pairs = messages
+            .filter { it.role == "system" || it.role == "user" || it.role == "assistant" }
+            .map { m ->
+                val role = when (m.role) {
+                    "assistant" -> "assistant"
+                    "system" -> "system"
+                    else -> "user"
+                }
+                role to m.content
+            }
+        val sb = StringBuilder()
+        engine.chat(
+            messages = pairs,
+            maxTokens = config.maxTokens,
+            temperature = config.temperature.toFloat(),
+            onToken = object : LocalLlmEngine.TokenCallback {
+                override fun onToken(piece: String): Boolean {
+                    sb.append(piece)
+                    onDelta?.invoke(piece)
+                    return !cancelled()
+                }
+            },
+        )
+        return ChatResult(content = sb.toString(), raw = sb.toString(), finishReason = "stop")
     }
 
     private fun chatOpenAi(

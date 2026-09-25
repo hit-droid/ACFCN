@@ -152,6 +152,8 @@ class SettingsStore(context: Context) {
         put("kind", cfg.kind)
         put("profileName", cfg.profileName)
         put("supportsNativeTools", cfg.supportsNativeTools)
+        put("onDeviceModelPath", cfg.onDeviceModelPath)
+        put("onDeviceContext", cfg.onDeviceContext)
     }
 
     private fun decodeConfig(raw: String): LlmConfig? {
@@ -168,6 +170,8 @@ class SettingsStore(context: Context) {
                 kind = o.optString("kind", LlmConfig.KIND_CLOUD),
                 profileName = o.optString("profileName", ""),
                 supportsNativeTools = o.optBoolean("supportsNativeTools", true),
+                onDeviceModelPath = o.optString("onDeviceModelPath", ""),
+                onDeviceContext = o.optInt("onDeviceContext", 2048),
             )
         }.getOrNull()
     }

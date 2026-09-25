@@ -112,6 +112,32 @@ class LocalModelStore(private val context: Context) {
 
     fun modelsDir(): File = modelsDir
 
+    /**
+     * Copies the imported model into app-private storage and returns the real
+     * file path. llama.cpp needs a filesystem path, not a content URI.
+     */
+    fun materialize(id: String): File? {
+        val m = find(id) ?: return null
+        val dest = File(modelsDir, sanitize(m.name))
+        if (dest.exists() && dest.length() == m.sizeBytes && dest.length() > 0) return dest
+        return runCatching {
+            val input = context.contentResolver.openInputStream(Uri.parse(m.uri)) ?: return null
+            input.use { ins ->
+                dest.outputStream().use { out -> ins.copyTo(out, 1 shl 20) }
+            }
+            dest
+        }.getOrNull()
+    }
+
+    fun localPathFor(id: String): String? {
+        val m = find(id) ?: return null
+        val candidate = File(modelsDir, sanitize(m.name))
+        return if (candidate.exists()) candidate.absolutePath else null
+    }
+
+    private fun sanitize(name: String): String =
+        name.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80)
+
     private fun persist(models: List<LocalModel>) {
         val arr = JSONArray()
         models.forEach { m ->

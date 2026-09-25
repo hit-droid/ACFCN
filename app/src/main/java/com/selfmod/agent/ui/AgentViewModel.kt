@@ -262,6 +262,63 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) { app.browser.navigate(url) }
     }
 
+    private val _engineStatus = MutableStateFlow("")
+    val engineStatus: StateFlow<String> = _engineStatus.asStateFlow()
+    private val _engineBusy = MutableStateFlow(false)
+    val engineBusy: StateFlow<Boolean> = _engineBusy.asStateFlow()
+    private val _engineReady = MutableStateFlow(app.engine.isLoaded())
+    val engineReady: StateFlow<Boolean> = _engineReady.asStateFlow()
+
+    /** Copies the GGUF into app storage and loads it into the on-device engine. */
+    fun loadOnDevice(m: LocalModel) {
+        if (_engineBusy.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _engineBusy.value = true
+            _engineStatus.value = "正在准备模型文件…"
+            try {
+                app.engine.unload()
+                _engineReady.value = false
+                val file = app.models.materialize(m.id)
+                    ?: run {
+                        _engineStatus.value = "无法读取模型文件"
+                        return@launch
+                    }
+                _engineStatus.value = "正在加载到内存（首次较慢）…"
+                val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 8192) else 2048
+                val ok = app.engine.load(file, nCtx = ctx)
+                if (ok) {
+                    _engineReady.value = true
+                    _engineStatus.value = "已加载：${m.name}（ctx $ctx）"
+                    val cfg = app.settings.llmConfig().copy(
+                        kind = LlmConfig.KIND_ONDEVICE,
+                        model = m.name.substringBeforeLast('.'),
+                        profileName = "端侧 · ${m.name.substringBeforeLast('.')}",
+                        supportsNativeTools = false,
+                        onDeviceModelPath = file.absolutePath,
+                        onDeviceContext = ctx,
+                    )
+                    setConfig(cfg)
+                    app.settings.setOfflineMode(true)
+                    _offlineMode.value = true
+                } else {
+                    _engineStatus.value = "加载失败：设备或模型不支持（需 arm64 且内存足够）"
+                }
+            } catch (e: Throwable) {
+                _engineStatus.value = "加载异常：${e.message}"
+            } finally {
+                _engineBusy.value = false
+            }
+        }
+    }
+
+    fun unloadOnDevice() {
+        viewModelScope.launch(Dispatchers.IO) {
+            app.engine.unload()
+            _engineReady.value = false
+            _engineStatus.value = "已卸载端侧模型"
+        }
+    }
+
     data class ScriptRunResult(val logs: String, val error: String?, val value: String?)
 
     private val _scriptOutput = MutableStateFlow<ScriptRunResult?>(null)

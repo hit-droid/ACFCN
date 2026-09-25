@@ -7,6 +7,7 @@ import com.selfmod.agent.browser.BrowserController
 import com.selfmod.agent.llm.ConnectionTester
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.offline.LocalModelStore
+import com.selfmod.agent.offline.native.LocalLlmEngine
 import com.selfmod.agent.plugin.PluginRegistry
 import com.selfmod.agent.repo.CodeRepository
 import com.selfmod.agent.script.ScriptApi
@@ -35,6 +36,7 @@ class App : Application() {
     lateinit var models: LocalModelStore
     lateinit var tester: ConnectionTester
     lateinit var sessions: SessionStore
+    lateinit var engine: LocalLlmEngine
 
     private val _uiEvents = MutableSharedFlow<UiEvent>(extraBufferCapacity = 32)
     val uiEvents = _uiEvents.asSharedFlow()
@@ -62,7 +64,9 @@ class App : Application() {
         runCatching { repo.importAssetScript(this, "demo.js", "demo") }
         runCatching { repo.importAssetScript(this, "offline_agent.js", "offline_agent") }
         plugins = PluginRegistry(repo, File(files, "odex"))
-        llmClient = LlmClient()
+        engine = LocalLlmEngine()
+        LocalLlmEngine.ensureLoaded()
+        llmClient = LlmClient(onDevice = engine)
         scriptEngine = ScriptEngine()
         browser = BrowserController()
         models = LocalModelStore(this)

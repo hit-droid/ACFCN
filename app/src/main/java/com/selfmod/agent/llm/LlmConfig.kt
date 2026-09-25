@@ -15,6 +15,8 @@ data class LlmConfig(
     val kind: String = KIND_CLOUD,
     val profileName: String = "",
     val supportsNativeTools: Boolean = true,
+    val onDeviceModelPath: String = "",
+    val onDeviceContext: Int = 2048,
 ) {
     fun host(): String = runCatching { java.net.URI(baseUrl).host.orEmpty() }.getOrDefault("")
 
@@ -27,6 +29,7 @@ data class LlmConfig(
     }
 
     fun isUsable(): Boolean {
+        if (kind == KIND_ONDEVICE) return onDeviceModelPath.isNotBlank()
         if (baseUrl.isBlank()) return false
         if (isLocalHost() || kind == KIND_LOCAL || kind == KIND_OFFLINE) return true
         return apiKey.isNotBlank()
@@ -42,6 +45,7 @@ data class LlmConfig(
         const val KIND_CLOUD = "cloud"
         const val KIND_LOCAL = "local"
         const val KIND_OFFLINE = "offline"
+        const val KIND_ONDEVICE = "ondevice"
 
         val DEFAULT = LlmConfig()
 
