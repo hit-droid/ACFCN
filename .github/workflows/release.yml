@@ -39,6 +39,9 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
 
+      - name: Assemble release APK (validates R8 rules)
+        run: ./gradlew :app:assembleRelease --no-daemon
+
       - name: Decode release keystore
         id: keystore
         env:
