@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.selfmod.agent.offline.LocalModel
+import com.selfmod.agent.offline.RecommendedModels
 import com.selfmod.agent.ui.theme.AccentAmber
 import com.selfmod.agent.ui.theme.AccentBlue
 import com.selfmod.agent.ui.theme.AccentGreen
@@ -139,6 +140,29 @@ fun OfflineScreen(vm: AgentViewModel) {
                 color = if (r.ok) AccentGreen else Danger,
                 fontSize = 12.sp,
             )
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Text("推荐模型（手机可跑）", color = TextPrimary, style = MaterialTheme.typography.titleSmall)
+        Text(
+            "先到页面下载 .gguf 文件到手机，再回到这里导入。建议从 1.5B / Q4_K_M 起步。",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+        RecommendedModels.ALL.forEach { rec ->
+            Column(
+                Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(rec.name, color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Text("${rec.quant} · ${rec.sizeLabel}", color = AccentBlue, fontSize = 11.sp)
+                }
+                Text("${rec.ramHint} · ${rec.note}", color = TextSecondary, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.openInBrowser(rec.url) }) { Text("打开下载页") }
+                }
+            }
         }
 
         Spacer(Modifier.height(4.dp))

@@ -268,6 +268,20 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) { app.browser.navigate(url) }
     }
 
+    /** Opens a URL in the shared in-app browser (used by model download pages). */
+    fun openInBrowser(url: String) {
+        _requestedTab.value = 1
+        viewModelScope.launch(Dispatchers.IO) { app.browser.navigate(url) }
+    }
+
+    private val _requestedTab = MutableStateFlow(-1)
+    val requestedTab: StateFlow<Int> = _requestedTab.asStateFlow()
+    fun consumeRequestedTab(): Int {
+        val t = _requestedTab.value
+        _requestedTab.value = -1
+        return t
+    }
+
     private val _engineStatus = MutableStateFlow("")
     val engineStatus: StateFlow<String> = _engineStatus.asStateFlow()
     private val _engineBusy = MutableStateFlow(false)

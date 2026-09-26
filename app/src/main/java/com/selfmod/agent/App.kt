@@ -15,6 +15,7 @@ import com.selfmod.agent.script.ScriptEngine
 import com.selfmod.agent.script.ScriptHost
 import com.selfmod.agent.store.SessionStore
 import com.selfmod.agent.store.SettingsStore
+import com.selfmod.agent.util.CrashStore
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
@@ -37,6 +38,7 @@ class App : Application() {
     lateinit var tester: ConnectionTester
     lateinit var sessions: SessionStore
     lateinit var engine: LocalLlmEngine
+    lateinit var crashStore: CrashStore
 
     private val _uiEvents = MutableSharedFlow<UiEvent>(extraBufferCapacity = 32)
     val uiEvents = _uiEvents.asSharedFlow()
@@ -47,6 +49,8 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        crashStore = CrashStore(this)
+        runCatching { CrashHandler.install(crashStore) }
         runCatching { initAll() }.onFailure {
             Log.e(TAG, "App init FAILED — app will start but features may be broken", it)
         }

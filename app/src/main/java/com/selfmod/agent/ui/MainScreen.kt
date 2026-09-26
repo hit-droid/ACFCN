@@ -19,6 +19,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +47,14 @@ fun MainScreen(vm: AgentViewModel) {
     val showOnboarding by vm.showOnboarding.collectAsState()
     val browser = vm.browser()
     val browserVisible = tab == 1
+    val requestedTab by vm.requestedTab.collectAsState()
+
+    LaunchedEffect(requestedTab) {
+        if (requestedTab >= 0) {
+            tab = requestedTab
+            vm.consumeRequestedTab()
+        }
+    }
 
     // Physical back: on the browser tab, go back in history first.
     BackHandler(enabled = browserVisible) {

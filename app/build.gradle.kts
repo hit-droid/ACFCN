@@ -24,6 +24,17 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signing is injected from env (CI) or gradle properties (local).
+            // Falls back to unsigned/debug so local builds never break.
+            val storePath = System.getenv("ACFCN_KEYSTORE") ?: (project.findProperty("acfcn.keystore") as String?)
+            if (!storePath.isNullOrBlank() && file(storePath).exists()) {
+                signingConfig = signingConfigs.create("release") {
+                    storeFile = file(storePath)
+                    storePassword = System.getenv("ACFCN_STORE_PASSWORD") ?: (project.findProperty("acfcn.storePassword") as String?) ?: ""
+                    keyAlias = System.getenv("ACFCN_KEY_ALIAS") ?: (project.findProperty("acfcn.keyAlias") as String?) ?: ""
+                    keyPassword = System.getenv("ACFCN_KEY_PASSWORD") ?: (project.findProperty("acfcn.keyPassword") as String?) ?: ""
+                }
+            }
         }
     }
 
