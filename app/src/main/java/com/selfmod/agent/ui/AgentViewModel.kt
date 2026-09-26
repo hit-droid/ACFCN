@@ -299,29 +299,39 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 app.engine.unload()
                 _engineReady.value = false
 
-                // Memory pre-flight: llama.cpp needs the weights plus KV cache/overhead.
-                val availableMb = availableHeapMb()
+                // Pre-flight checks. IMPORTANT: llama.cpp uses *native* memory (mmap),
+                // so the Java heap limit is irrelevant. We check real system RAM and
+                // free disk space (materialize() copies the file into app storage).
                 val neededMb = m.sizeBytes / (1024L * 1024L)
-                val estimateMb = neededMb + neededMb / 4 + 256
-                if (estimateMb > availableMb) {
+
+                val freeDiskMb = freeDiskMb()
+                // Copy needs roughly the model size on disk (plus slack).
+                if (neededMb + 128 > freeDiskMb) {
                     _engineStatus.value =
-                        "内存不足：该模型约需 ${estimateMb}MB，当前可用约 ${availableMb}MB。" +
-                            "建议换更小的量化模型（如 Q4_K_M 的 1.5B/3B）。"
+                        "存储不足：复制该模型约需 ${neededMb}MB，剩余约 ${freeDiskMb}MB。" +
+                            "请清理空间后重试。"
                     return@launch
                 }
 
-                _engineStatus.value = "正在准备模型文件…"
+                val ram = ramSnapshotMb()
+                // Llama keeps weights + KV cache + compute buffers. Estimate ~1.3x.
+                val estimateMb = neededMb + neededMb / 3 + 256
+                val warn = if (estimateMb > ram.first) {
+                    "⚠ 内存偏紧（需约 ${estimateMb}MB，可用 ${ram.first}MB / 总 ${ram.second}MB），加载后可能卡顿。\n"
+                } else ""
+
+                _engineStatus.value = warn + "正在准备模型文件…"
                 val file = app.models.materialize(m.id)
                     ?: run {
                         _engineStatus.value = "无法读取模型文件"
                         return@launch
                     }
-                _engineStatus.value = "正在加载到内存（首次较慢，可能数十秒）…"
+                _engineStatus.value = warn + "正在加载到内存（首次较慢，可能数十秒）…"
                 val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 8192) else 2048
                 val ok = app.engine.load(file, nCtx = ctx)
                 if (ok) {
                     _engineReady.value = true
-                    _engineStatus.value = "已加载：${m.name}（ctx $ctx）"
+                    _engineStatus.value = warn + "已加载：${m.name}（ctx $ctx）"
                     val cfg = app.settings.llmConfig().copy(
                         kind = LlmConfig.KIND_ONDEVICE,
                         model = m.name.substringBeforeLast('.'),
@@ -344,18 +354,19 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun availableHeapMb(): Long {
-        val rt = Runtime.getRuntime()
-        val maxMb = rt.maxMemory() / (1024L * 1024L)
-        val usedMb = (rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L)
-        val heapAvail = maxMb - usedMb
-        // Native model memory is outside the Java heap; use system memory as a hint too.
+    private fun freeDiskMb(): Long {
+        val dir = getApplication<android.app.Application>().filesDir
+        val stat = android.os.StatFs(dir.absolutePath)
+        return stat.availableBytes / (1024L * 1024L)
+    }
+
+    /** @return (availableMb, totalMb) of real physical RAM. */
+    private fun ramSnapshotMb(): Pair<Long, Long> {
         val info = android.app.ActivityManager.MemoryInfo()
-        val am = getApplication<android.app.Application>().getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val am = getApplication<android.app.Application>()
+            .getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
         am.getMemoryInfo(info)
-        val sysAvailMb = info.availMem / (1024L * 1024L)
-        // We can use roughly a third of free system RAM safely for native weights.
-        return maxOf(heapAvail, sysAvailMb / 3)
+        return (info.availMem / (1024L * 1024L)) to (info.totalMem / (1024L * 1024L))
     }
 
     fun unloadOnDevice() {

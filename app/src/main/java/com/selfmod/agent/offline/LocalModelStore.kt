@@ -113,11 +113,22 @@ class LocalModelStore(private val context: Context) {
     fun modelsDir(): File = modelsDir
 
     /**
-     * Copies the imported model into app-private storage and returns the real
-     * file path. llama.cpp needs a filesystem path, not a content URI.
+     * Returns a real filesystem path llama.cpp can open.
+     *
+     * Strategy: (1) if the content URI already points at a readable real file
+     * (common for Downloads / Documents via `_data`), use it directly — no copy,
+     * no extra disk. (2) otherwise copy into app storage.
      */
     fun materialize(id: String): File? {
         val m = find(id) ?: return null
+
+        // 1) Try to resolve a real path from the content URI (no copy).
+        resolveRealPath(Uri.parse(m.uri))?.let { p ->
+            val f = File(p)
+            if (f.exists() && f.canRead()) return f
+        }
+
+        // 2) Fall back to copying into app-private storage.
         val dest = File(modelsDir, sanitize(m.name))
         if (dest.exists() && dest.length() == m.sizeBytes && dest.length() > 0) return dest
         return runCatching {
@@ -126,6 +137,19 @@ class LocalModelStore(private val context: Context) {
                 dest.outputStream().use { out -> ins.copyTo(out, 1 shl 20) }
             }
             dest
+        }.getOrNull()
+    }
+
+    /** Best-effort: resolve a content:// URI to a real file path via the provider's _data column. */
+    private fun resolveRealPath(uri: Uri): String? {
+        if (uri.scheme == "file") return uri.path
+        return runCatching {
+            context.contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex("_data")
+                    if (idx >= 0) c.getString(idx) else null
+                } else null
+            }
         }.getOrNull()
     }
 
