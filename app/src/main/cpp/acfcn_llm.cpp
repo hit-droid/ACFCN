@@ -14,6 +14,13 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+static JavaVM *g_jvm = nullptr;
+
+extern "C" jint JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
+    g_jvm = vm;
+    return JNI_VERSION_1_6;
+}
+
 namespace {
 
 struct Engine {
@@ -23,9 +30,26 @@ struct Engine {
     int n_ctx = 2048;
     std::mutex mu;
     bool ready = false;
+    // Progress reporting back to Kotlin during model load (0.0..1.0).
+    jobject progressObj = nullptr;
+    jmethodID progressMid = nullptr;
 };
 
 Engine g_engine;
+
+static bool progress_trampoline(float progress, void *user_data) {
+    Engine *e = static_cast<Engine *>(user_data);
+    if (!e || !e->progressObj || !e->progressMid) return true;
+    JNIEnv *env = nullptr;
+    bool attached = false;
+    if (g_jvm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK) {
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return true;
+        attached = true;
+    }
+    env->CallVoidMethod(e->progressObj, e->progressMid, (jfloat) progress);
+    if (attached) g_jvm->DetachCurrentThread();
+    return true;
+}
 
 std::string jstr(JNIEnv *env, jstring s) {
     if (s == nullptr) return {};
@@ -56,7 +80,8 @@ bool emit(JNIEnv *env, jobject cb, jmethodID mid, const std::string &piece) {
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
-        JNIEnv *env, jobject /*thiz*/, jstring modelPath, jint nCtx, jint nThreads) {
+        JNIEnv *env, jobject /*thiz*/, jstring modelPath, jint nCtx, jint nThreads,
+        jobject progressCallback) {
     std::lock_guard<std::mutex> lock(g_engine.mu);
     free_locked();
 
@@ -65,9 +90,36 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0; // CPU only; keeps it portable across all arm64 phones
 
+    // mmap: map the weights instead of reading them fully into RAM. This is the
+    // single biggest win for load time and memory (matches what MNN does).
+    mparams.load_mode = LLAMA_LOAD_MODE_MMAP;
+    // Skip full tensor validation; GGUF is already integrity-safe and this
+    // meaningfully cuts load time on multi-GB files.
+    mparams.check_tensors = false;
+
+    // Wire the progress callback so the UI can show a real percentage.
+    if (progressCallback != nullptr) {
+        jclass cls = env->GetObjectClass(progressCallback);
+        g_engine.progressMid = env->GetMethodID(cls, "onProgress", "(F)V");
+        env->DeleteLocalRef(cls);
+        if (g_engine.progressMid != nullptr) {
+            g_engine.progressObj = env->NewGlobalRef(progressCallback);
+            mparams.progress_callback = progress_trampoline;
+            mparams.progress_callback_user_data = &g_engine;
+        }
+    }
+
     const std::string path = jstr(env, modelPath);
-    LOGI("loading model: %s", path.c_str());
+    LOGI("loading model (mmap): %s", path.c_str());
     g_engine.model = llama_model_load_from_file(path.c_str(), mparams);
+
+    // Release the progress ref; no longer needed after load.
+    if (g_engine.progressObj != nullptr) {
+        env->DeleteGlobalRef(g_engine.progressObj);
+        g_engine.progressObj = nullptr;
+        g_engine.progressMid = nullptr;
+    }
+
     if (!g_engine.model) {
         LOGE("failed to load model");
         return JNI_FALSE;

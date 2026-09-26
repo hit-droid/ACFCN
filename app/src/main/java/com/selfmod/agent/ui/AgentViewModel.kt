@@ -326,9 +326,18 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                         _engineStatus.value = "无法读取模型文件"
                         return@launch
                     }
-                _engineStatus.value = warn + "正在加载到内存（首次较慢，可能数十秒）…"
+                _engineStatus.value = warn + "正在加载到内存（mmap 映射，通常更快）…"
                 val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 8192) else 2048
-                val ok = app.engine.load(file, nCtx = ctx)
+                val ok = app.engine.load(
+                    file,
+                    nCtx = ctx,
+                    onProgress = object : com.selfmod.agent.offline.native.LocalLlmEngine.LoadCallback {
+                        override fun onProgress(progress: Float) {
+                            val pct = (progress * 100).toInt().coerceIn(0, 100)
+                            _engineStatus.value = warn + "正在加载模型… $pct%"
+                        }
+                    },
+                )
                 if (ok) {
                     _engineReady.value = true
                     _engineStatus.value = warn + "已加载：${m.name}（ctx $ctx）"

@@ -15,6 +15,11 @@ class LocalLlmEngine {
         fun onToken(piece: String): Boolean
     }
 
+    interface LoadCallback {
+        /** @param progress 0.0 .. 1.0 */
+        fun onProgress(progress: Float)
+    }
+
     @Volatile
     private var loaded = false
 
@@ -24,10 +29,15 @@ class LocalLlmEngine {
      * @param nCtx context window (tokens). Larger = more RAM. 2048 is a safe default.
      * @param nThreads worker threads; pass 0 to auto-detect.
      */
-    fun load(modelFile: File, nCtx: Int = 2048, nThreads: Int = 0): Boolean {
+    fun load(
+        modelFile: File,
+        nCtx: Int = 2048,
+        nThreads: Int = 0,
+        onProgress: LoadCallback? = null,
+    ): Boolean {
         if (!modelFile.exists()) return false
         val threads = if (nThreads > 0) nThreads else defaultThreads()
-        loaded = nativeInit(modelFile.absolutePath, nCtx, threads)
+        loaded = nativeInit(modelFile.absolutePath, nCtx, threads, onProgress)
         return loaded
     }
 
@@ -74,7 +84,12 @@ class LocalLlmEngine {
         return cores.coerceIn(2, 6)
     }
 
-    private external fun nativeInit(modelPath: String, nCtx: Int, nThreads: Int): Boolean
+    private external fun nativeInit(
+        modelPath: String,
+        nCtx: Int,
+        nThreads: Int,
+        progressCallback: LoadCallback?,
+    ): Boolean
     private external fun nativeFree()
     private external fun nativeIsReady(): Boolean
     private external fun nativeGenerate(

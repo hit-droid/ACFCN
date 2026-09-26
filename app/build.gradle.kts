@@ -58,6 +58,11 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+    androidResources {
+        // Keep model weights uncompressed so they can be mmap'd directly
+        // (matches MNN's approach; relevant if a model is ever bundled).
+        noCompress += listOf("gguf", "mnn", "mdl", "weight", "bin")
+    }
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
