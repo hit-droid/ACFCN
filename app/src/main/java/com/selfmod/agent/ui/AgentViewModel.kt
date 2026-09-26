@@ -340,7 +340,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _engineProgress.value = -1f
                 _engineStatus.value = warn + "正在加载到内存（mmap 映射，通常更快）…"
-                val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 8192) else 2048
+                // Keep the KV cache modest; a huge context on a low-RAM phone
+                // thrashes and makes generation crawl.
+                val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 4096) else 2048
                 val ok = app.engine.load(
                     file,
                     nCtx = ctx,
@@ -429,6 +431,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     messages = listOf("user" to "Say hello in one short sentence."),
                     maxTokens = 32,
                     temperature = 0.2f,
+                    timeoutMs = 60_000,
                     onToken = object : com.selfmod.agent.offline.native.LocalLlmEngine.TokenCallback {
                         override fun onToken(piece: String): Boolean {
                             out.append(piece)

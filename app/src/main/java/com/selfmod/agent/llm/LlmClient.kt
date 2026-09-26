@@ -73,6 +73,13 @@ class LlmClient(
                 }
             },
         )
+        if (code == -99) {
+            throw LlmException(
+                504,
+                "端侧推理超时（120 秒没有输出）。多半是模型太大、内存不足导致系统在换页。" +
+                    "请换更小的模型（如 1.5B/1B 的 Q4_K_M），或关闭其他 App 后重试。",
+            )
+        }
         if (code < 0) {
             throw LlmException(
                 502,

@@ -7,6 +7,8 @@
 #include <vector>
 #include <mutex>
 #include <cstring>
+#include <chrono>
+#include <algorithm>
 
 #include "llama.h"
 
@@ -129,8 +131,12 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx     = (uint32_t) nCtx;
     cparams.n_batch   = 512;
+    cparams.n_ubatch  = 512;
     cparams.n_threads = nThreads;
     cparams.n_threads_batch = nThreads;
+
+    LOGI("ctx params: n_ctx=%u n_batch=%u n_ubatch=%u threads=%d",
+         cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, nThreads);
 
     g_engine.ctx = llama_init_from_model(g_engine.model, cparams);
     if (!g_engine.ctx) {
@@ -218,6 +224,8 @@ static jint generate_impl(
     // Feed prompt in chunks of n_batch (llama_batch_get_one keeps a single seq).
     const int n_batch = 512;
     int pos = 0;
+    LOGI("prefill start: %d prompt tokens", (int) tokens.size());
+    auto prefill_t0 = std::chrono::steady_clock::now();
     while (pos < (int) tokens.size()) {
         int chunk = std::min(n_batch, (int) tokens.size() - pos);
         llama_batch batch = llama_batch_get_one(tokens.data() + pos, chunk);
@@ -228,13 +236,19 @@ static jint generate_impl(
         }
         pos += chunk;
     }
+    auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - prefill_t0).count();
+    LOGI("prefill done in %lld ms", (long long) prefill_ms);
 
     std::vector<char> buf(256);
     for (int i = 0; i < maxTokens; ++i) {
         llama_token id = llama_sampler_sample(smpl, ctx, -1);
         llama_sampler_accept(smpl, id);
 
-        if (llama_vocab_is_eog(vocab, id)) break;
+        if (llama_vocab_is_eog(vocab, id)) {
+            LOGI("hit EOG at token %d", i);
+            break;
+        }
 
         int n = llama_token_to_piece(vocab, id, buf.data(), (int) buf.size(), 0, true);
         if (n < 0) {
@@ -245,6 +259,9 @@ static jint generate_impl(
 
         piece_buf.assign(buf.data(), n);
         emitted++;
+        if (i < 3 || i % 16 == 0) {
+            LOGI("token %d: emitted=%d piece_len=%d", i, emitted, n);
+        }
         if (!emit(env, callback, mid, piece_buf)) {
             LOGI("generation cancelled by caller at token %d", i);
             break;
@@ -258,6 +275,7 @@ static jint generate_impl(
     }
 
     llama_sampler_free(smpl);
+    LOGI("generation done: %d tokens emitted", emitted);
     return emitted;
 }
 

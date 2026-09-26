@@ -69,12 +69,37 @@ class LocalLlmEngine {
         topK: Int = 40,
         topP: Float = 0.95f,
         onToken: TokenCallback? = null,
+        timeoutMs: Long = 120_000,
     ): Int {
         if (!isLoaded()) return -1
         val roles = messages.map { it.first }.toTypedArray()
         val contents = messages.map { it.second }.toTypedArray()
         val tmpl = nativeChatTemplate()
-        return nativeChat(tmpl, roles, contents, maxTokens, temperature, topK, topP, onToken)
+        return runWithWatchdog(timeoutMs) {
+            nativeChat(tmpl, roles, contents, maxTokens, temperature, topK, topP, onToken)
+        }
+    }
+
+    /**
+     * Runs native work on a worker thread and aborts (returns -99) if it takes
+     * longer than [timeoutMs]. Prevents a stuck native decode from freezing the
+     * caller forever.
+     */
+    private fun runWithWatchdog(timeoutMs: Long, block: () -> Int): Int {
+        val result = java.util.concurrent.atomic.AtomicInteger(Int.MIN_VALUE)
+        val worker = Thread {
+            runCatching { result.set(block()) }
+        }
+        worker.isDaemon = true
+        worker.start()
+        worker.join(timeoutMs)
+        if (worker.isAlive) {
+            // Cannot safely interrupt native code; report timeout and let it die
+            // with the process. The engine is marked unusable to avoid reuse.
+            loaded = false
+            return -99
+        }
+        return result.get()
     }
 
     fun contextSize(): Int = nativeContextSize()
