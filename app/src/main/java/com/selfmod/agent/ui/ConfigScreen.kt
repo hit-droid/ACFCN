@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.selfmod.agent.llm.LlmConfig
+import com.selfmod.agent.ui.theme.AccentBlue
 import com.selfmod.agent.ui.theme.AccentGreen
 import com.selfmod.agent.ui.theme.Danger
 import com.selfmod.agent.ui.theme.SurfaceVariant
