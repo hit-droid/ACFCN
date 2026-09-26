@@ -57,4 +57,14 @@ object PromptTemplates {
         appendLine()
         appendLine("本次可用的工具列表：" + toolNames.joinToString(", "))
     }
+
+    /** Short prompt for on-device 1–3B models; long system text makes prefill crawl. */
+    fun systemOnDevice(toolNames: List<String>): String = buildString {
+        appendLine("你是 ACFCN，安卓端侧智能体。用中文简短回答。")
+        appendLine("需要工具时输出：")
+        appendLine("Action: tool_name")
+        appendLine("Action Input: {\"arg\":\"value\"}")
+        appendLine("完成后直接给最终答复。")
+        appendLine("工具：" + toolNames.joinToString(", "))
+    }
 }

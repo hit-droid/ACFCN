@@ -37,6 +37,9 @@ class AgentCore(
 
     fun systemPrompt(): String {
         val cfg = settings.llmConfig()
+        if (cfg.kind == com.selfmod.agent.llm.LlmConfig.KIND_ONDEVICE) {
+            return PromptTemplates.systemOnDevice(tools.names())
+        }
         return PromptTemplates.system(
             tools.names(),
             settings.offlineMode(),

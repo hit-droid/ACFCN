@@ -19,4 +19,12 @@ class PromptTemplatesTest {
         assertTrue(s.contains("http_get"))
         assertTrue(s.contains("思考-行动-观察"))
     }
+
+    @Test
+    fun onDevicePromptIsShort() {
+        val s = PromptTemplates.systemOnDevice(listOf("browser_open", "execute_js"))
+        assertTrue(s.length < 400)
+        assertTrue(s.contains("Action:"))
+        assertTrue(s.contains("browser_open"))
+    }
 }

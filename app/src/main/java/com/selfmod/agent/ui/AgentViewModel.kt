@@ -347,12 +347,35 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 _engineProgress.value = -1f
                 _engineStatus.value = warn + "正在加载到内存（mmap 映射，通常更快）…"
-                // Keep the KV cache modest; a huge context on a low-RAM phone
-                // thrashes and makes generation crawl.
-                val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 4096) else 2048
+                // 6GB phones thrash with ctx=2048 + batch=512. Keep KV and
+                // prefill buffers modest so the first token arrives in tens of
+                // seconds instead of minutes of swapping.
+                val totalRamMb = ram.second
+                val ctxCap = when {
+                    totalRamMb < 7000 -> 1024
+                    totalRamMb < 11000 -> 2048
+                    else -> 4096
+                }
+                val ctx = if (m.contextLength > 0) {
+                    m.contextLength.toInt().coerceIn(512, ctxCap)
+                } else ctxCap
+                val nBatch = when {
+                    totalRamMb < 7000 -> 32
+                    totalRamMb < 11000 -> 64
+                    else -> 128
+                }
+                val nThreads = when {
+                    totalRamMb < 7000 -> 4
+                    else -> 0
+                }
+                com.selfmod.agent.util.Diagnostics.log(
+                    "load", "ram=${ram.first}/${ram.second}MB ctx=$ctx nBatch=$nBatch nThreads=$nThreads",
+                )
                 val ok = app.engine.load(
                     file,
                     nCtx = ctx,
+                    nThreads = nThreads,
+                    nBatch = nBatch,
                     onProgress = object : com.selfmod.agent.offline.native.LocalLlmEngine.LoadCallback {
                         override fun onProgress(progress: Float) {
                             _engineProgress.value = progress
@@ -479,9 +502,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 val out = StringBuilder()
                 val code = app.engine.chat(
                     messages = listOf("user" to "Say hello in one short sentence."),
-                    maxTokens = 32,
+                    maxTokens = 24,
                     temperature = 0.2f,
-                    timeoutMs = 60_000,
+                    timeoutMs = 120_000,
                     onToken = object : com.selfmod.agent.offline.native.LocalLlmEngine.TokenCallback {
                         override fun onToken(piece: String): Boolean {
                             out.append(piece)
@@ -492,7 +515,11 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 val dt = System.currentTimeMillis() - t0
                 sb.appendLine("推理返回码: $code")
                 sb.appendLine("耗时: ${dt}ms")
-                sb.appendLine("输出: ${out.toString().ifBlank { "（空！模型没有产生任何 token）" }}")
+                val text = out.toString()
+                sb.appendLine("输出: ${text.ifBlank { "（空！模型没有产生任何 token）" }}")
+                if (code == -99 && text.isNotBlank()) {
+                    sb.appendLine("说明: 空闲看门狗触发，但已有部分输出，引擎仍保持加载。")
+                }
             } catch (e: Throwable) {
                 sb.appendLine("自检异常: ${e.message}")
             } finally {

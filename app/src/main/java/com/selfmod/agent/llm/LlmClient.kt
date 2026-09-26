@@ -74,9 +74,12 @@ class LlmClient(
             },
         )
         if (code == -99) {
+            if (sb.isNotEmpty()) {
+                return ChatResult(content = sb.toString(), raw = sb.toString(), finishReason = "timeout")
+            }
             throw LlmException(
                 504,
-                "端侧推理超时（120 秒没有输出）。多半是模型太大、内存不足导致系统在换页。" +
+                "端侧推理超时（长时间没有新 token）。多半是模型太大、内存不足导致系统在换页。" +
                     "请换更小的模型（如 1.5B/1B 的 Q4_K_M），或关闭其他 App 后重试。",
             )
         }

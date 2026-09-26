@@ -6,7 +6,7 @@ ACFCN 是一个运行在 Android 上的**自进化智能体**应用：它能编�
 
 - **智能体 Tab**：思考-行动-观察循环；流式输出；停止 / 重试；会话自动持久化；Markdown 渲染（代码块可复制）。
 - **浏览器 Tab**：常驻 WebView，用户与智能体共用；按编号元素操作（snapshot/click/type/extract）；智能体点击时页面高亮标记；历史记录、返回键处理。
-- **离线 Tab**：**端侧推理**（内置 llama.cpp + JNI，arm64，CPU）；导入 GGUF 并解析架构/量化/上下文/参数量；复制与加载进度条；内存/存储预检；一键推荐小模型；诊断日志。
+- **离线 Tab**：**端侧推理**（内置 llama.cpp JNI，arm64，CPU，mmap）；导入 GGUF；按机型下调 ctx/batch；诊断日志。
 - **脚本 Tab**：沙箱内执行 JavaScript（Rhino），持久化脚本 + 自动版本回滚。
 - **插件 Tab**：运行时通过 DexClassLoader 加载 `.dex` 插件。
 - **API Tab**：云端 / 本机预设一键接入，测试连接、列出模型、配置档案；**API Key 使用系统密钥库加密存储**；存储空间查看与清理。
@@ -64,4 +64,4 @@ git tag v1.1 && git push origin v1.1
 
 ## 说明
 
-端侧内嵌推理（llama.cpp JNI 直接跑 GGUF）尚未实现，当前离线路径是「导入权重 + 本机兼容服务」。
+端侧走内嵌 llama.cpp（CPU / arm64-v8a）。6GB 机建议 1B–1.5B Q4_K_M；2B 能加载，首 token 可能要几十秒。诊断日志在离线页可复制。

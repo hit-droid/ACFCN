@@ -30,6 +30,7 @@ struct Engine {
     llama_context *ctx   = nullptr;
     const llama_vocab *vocab = nullptr;
     int n_ctx = 2048;
+    int n_batch = 64;
     std::mutex mu;
     bool ready = false;
     // Progress reporting back to Kotlin during model load (0.0..1.0).
@@ -83,7 +84,7 @@ bool emit(JNIEnv *env, jobject cb, jmethodID mid, const std::string &piece) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         JNIEnv *env, jobject /*thiz*/, jstring modelPath, jint nCtx, jint nThreads,
-        jobject progressCallback) {
+        jint nBatch, jobject progressCallback) {
     std::lock_guard<std::mutex> lock(g_engine.mu);
     free_locked();
 
@@ -129,9 +130,12 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     g_engine.vocab = llama_model_get_vocab(g_engine.model);
 
     llama_context_params cparams = llama_context_default_params();
+    int batch = nBatch > 0 ? (int) nBatch : 64;
+    if (batch < 8) batch = 8;
+    if (batch > 512) batch = 512;
     cparams.n_ctx     = (uint32_t) nCtx;
-    cparams.n_batch   = 512;
-    cparams.n_ubatch  = 512;
+    cparams.n_batch   = (uint32_t) batch;
+    cparams.n_ubatch  = (uint32_t) batch;
     cparams.n_threads = nThreads;
     cparams.n_threads_batch = nThreads;
 
@@ -145,6 +149,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         return JNI_FALSE;
     }
     g_engine.n_ctx = nCtx;
+    g_engine.n_batch = batch;
     g_engine.ready = true;
     LOGI("engine ready, n_ctx=%d", nCtx);
     return JNI_TRUE;
@@ -221,8 +226,9 @@ static jint generate_impl(
     int emitted = 0;
     std::string piece_buf;
 
-    // Feed prompt in chunks of n_batch (llama_batch_get_one keeps a single seq).
-    const int n_batch = 512;
+    // Feed prompt in chunks of n_batch. Small batch on low-RAM phones
+    // avoids a 50s+ first-token stall from swapping.
+    const int n_batch = g_engine.n_batch > 0 ? g_engine.n_batch : 64;
     int pos = 0;
     LOGI("prefill start: %d prompt tokens", (int) tokens.size());
     auto prefill_t0 = std::chrono::steady_clock::now();

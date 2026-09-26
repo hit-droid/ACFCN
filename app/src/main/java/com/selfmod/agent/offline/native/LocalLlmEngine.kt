@@ -26,13 +26,15 @@ class LocalLlmEngine {
     fun isLoaded(): Boolean = loaded && nativeIsReady()
 
     /**
-     * @param nCtx context window (tokens). Larger = more RAM. 2048 is a safe default.
+     * @param nCtx context window (tokens). Larger = more RAM. 1024 is safer on 6GB phones.
      * @param nThreads worker threads; pass 0 to auto-detect.
+     * @param nBatch prompt-eval chunk size. Smaller = less RAM / slower prefill.
      */
     fun load(
         modelFile: File,
-        nCtx: Int = 2048,
+        nCtx: Int = 1024,
         nThreads: Int = 0,
+        nBatch: Int = 64,
         onProgress: LoadCallback? = null,
     ): Boolean {
         if (!modelFile.exists()) {
@@ -43,10 +45,10 @@ class LocalLlmEngine {
         com.selfmod.agent.util.Diagnostics.log(
             "engine",
             "load: ${modelFile.name} size=${modelFile.length() / (1024 * 1024)}MB " +
-                "nCtx=$nCtx threads=$threads exists=${modelFile.canRead()}",
+                "nCtx=$nCtx nBatch=$nBatch threads=$threads exists=${modelFile.canRead()}",
         )
         val t0 = System.currentTimeMillis()
-        loaded = nativeInit(modelFile.absolutePath, nCtx, threads, onProgress)
+        loaded = nativeInit(modelFile.absolutePath, nCtx, threads, nBatch, onProgress)
         com.selfmod.agent.util.Diagnostics.log(
             "engine",
             "load 返回 $loaded，耗时 ${System.currentTimeMillis() - t0}ms",
@@ -88,17 +90,23 @@ class LocalLlmEngine {
             com.selfmod.agent.util.Diagnostics.log("engine", "chat: 未加载")
             return -1
         }
-        val roles = messages.map { it.first }.toTypedArray()
-        val contents = messages.map { it.second }.toTypedArray()
         val rawTmpl = nativeChatTemplate()
-        val tmpl = resolveTemplateName(rawTmpl)
+        val tmpl = com.selfmod.agent.offline.OnDeviceTemplates.resolve(rawTmpl)
+        val folded = com.selfmod.agent.offline.OnDeviceTemplates.foldSystem(messages, tmpl)
+        val useRoles = folded.map { it.first }.toTypedArray()
+        val useContents = folded.map { it.second }.toTypedArray()
         com.selfmod.agent.util.Diagnostics.log(
-            "engine", "chat: rawTemplate=${rawTmpl.take(40)}… resolved=$tmpl maxTokens=$maxTokens",
+            "engine",
+            "chat: resolved=$tmpl msgs=${folded.size} (raw=${messages.size}) maxTokens=$maxTokens idleTimeout=${timeoutMs}ms",
         )
         val t0 = System.currentTimeMillis()
         val first = java.util.concurrent.atomic.AtomicBoolean(true)
+        val lastTokenAt = java.util.concurrent.atomic.AtomicLong(t0)
+        val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
         val wrapped = object : TokenCallback {
             override fun onToken(piece: String): Boolean {
+                if (aborted.get()) return false
+                lastTokenAt.set(System.currentTimeMillis())
                 if (first.compareAndSet(true, false)) {
                     com.selfmod.agent.util.Diagnostics.log(
                         "engine", "chat: 首 token 耗时 ${System.currentTimeMillis() - t0}ms",
@@ -107,8 +115,8 @@ class LocalLlmEngine {
                 return onToken?.onToken(piece) ?: true
             }
         }
-        val code = runWithWatchdog(timeoutMs) {
-            nativeChat(tmpl, roles, contents, maxTokens, temperature, topK, topP, wrapped)
+        val code = runWithIdleWatchdog(timeoutMs, lastTokenAt, aborted) {
+            nativeChat(tmpl, useRoles, useContents, maxTokens, temperature, topK, topP, wrapped)
         }
         com.selfmod.agent.util.Diagnostics.log(
             "engine", "chat: 返回 $code，总耗时 ${System.currentTimeMillis() - t0}ms",
@@ -117,23 +125,37 @@ class LocalLlmEngine {
     }
 
     /**
-     * Runs native work on a worker thread and aborts (returns -99) if it takes
-     * longer than [timeoutMs]. Prevents a stuck native decode from freezing the
-     * caller forever.
+     * Runs native work on a worker. Times out only after [idleMs] with no new
+     * tokens (prefill + decode). First token on a 6GB phone can take 30–90s;
+     * once tokens start flowing we keep waiting.
      */
-    private fun runWithWatchdog(timeoutMs: Long, block: () -> Int): Int {
+    private fun runWithIdleWatchdog(
+        idleMs: Long,
+        lastTokenAt: java.util.concurrent.atomic.AtomicLong,
+        aborted: java.util.concurrent.atomic.AtomicBoolean,
+        block: () -> Int,
+    ): Int {
         val result = java.util.concurrent.atomic.AtomicInteger(Int.MIN_VALUE)
         val worker = Thread {
             runCatching { result.set(block()) }
         }
         worker.isDaemon = true
         worker.start()
-        worker.join(timeoutMs)
-        if (worker.isAlive) {
-            // Cannot safely interrupt native code; report timeout and let it die
-            // with the process. The engine is marked unusable to avoid reuse.
-            loaded = false
-            return -99
+        val hardCap = (idleMs * 8).coerceAtMost(10 * 60_000L)
+        val started = System.currentTimeMillis()
+        while (worker.isAlive) {
+            worker.join(2_000)
+            if (!worker.isAlive) break
+            val idle = System.currentTimeMillis() - lastTokenAt.get()
+            val elapsed = System.currentTimeMillis() - started
+            if (idle >= idleMs || elapsed >= hardCap) {
+                aborted.set(true)
+                com.selfmod.agent.util.Diagnostics.log(
+                    "engine",
+                    "chat: 空闲超时 idle=${idle}ms elapsed=${elapsed}ms（请 native 尽快停，引擎保持加载）",
+                )
+                return -99
+            }
         }
         return result.get()
     }
@@ -142,30 +164,6 @@ class LocalLlmEngine {
 
     /** The chat template the model reports (falls back to "chatml"). */
     fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
-
-    /**
-     * llama.cpp's llama_chat_apply_template only accepts a *name* of a built-in
-     * template, never a raw Jinja string. Models embed a full Jinja template in
-     * their metadata, so we must map it back to the closest built-in family.
-     */
-    private fun resolveTemplateName(raw: String): String {
-        if (raw.isBlank()) return "chatml"
-        // Already a plain built-in name?
-        val known = setOf("chatml", "gemma", "llama3", "llama2", "mistral", "vicuna", "alpaca", "zephyr", "phi3", "qwen", "deepseek", "command-r", "openchat")
-        val lower = raw.trim().lowercase()
-        if (lower in known) return lower
-        // Sniff a family from the Jinja content.
-        return when {
-            raw.contains("<start_of_turn>") -> "gemma"
-            raw.contains("<|start_header_id|>") -> "llama3"
-            raw.contains("<|im_start|>") -> "chatml"
-            raw.contains("[INST]") -> "mistral"
-            raw.contains("<|endoftext|>") && raw.contains("Human:") -> "chatml"
-            raw.contains("<|user|>") && raw.contains("<|assistant|>") -> "phi3"
-            raw.contains("<|im_start|>") -> "chatml"
-            else -> "chatml"
-        }
-    }
 
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
@@ -176,6 +174,7 @@ class LocalLlmEngine {
         modelPath: String,
         nCtx: Int,
         nThreads: Int,
+        nBatch: Int,
         progressCallback: LoadCallback?,
     ): Boolean
     private external fun nativeFree()
