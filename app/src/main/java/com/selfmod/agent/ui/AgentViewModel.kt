@@ -289,6 +289,10 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private val _engineReady = MutableStateFlow(app.engine.isLoaded())
     val engineReady: StateFlow<Boolean> = _engineReady.asStateFlow()
 
+    private val _engineProgress = MutableStateFlow(-1f)
+    /** 0..1 while copying/loading, -1 when idle. */
+    val engineProgress: StateFlow<Float> = _engineProgress.asStateFlow()
+
     /** Copies the GGUF into app storage and loads it into the on-device engine. */
     fun loadOnDevice(m: LocalModel) {
         if (_engineBusy.value) return
@@ -321,11 +325,20 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 } else ""
 
                 _engineStatus.value = warn + "正在准备模型文件…"
-                val file = app.models.materialize(m.id)
-                    ?: run {
-                        _engineStatus.value = "无法读取模型文件"
-                        return@launch
+                val file = app.models.materialize(m.id) { progress ->
+                    if (progress < 0f) {
+                        _engineProgress.value = -1f
+                        _engineStatus.value = warn + "模型文件已在本地，无需复制。"
+                    } else {
+                        _engineProgress.value = progress
+                        val pct = (progress * 100).toInt().coerceIn(0, 100)
+                        _engineStatus.value = warn + "正在复制模型到 App 目录… $pct%"
                     }
+                } ?: run {
+                    _engineStatus.value = "无法读取模型文件"
+                    return@launch
+                }
+                _engineProgress.value = -1f
                 _engineStatus.value = warn + "正在加载到内存（mmap 映射，通常更快）…"
                 val ctx = if (m.contextLength > 0) m.contextLength.toInt().coerceIn(512, 8192) else 2048
                 val ok = app.engine.load(
@@ -333,11 +346,13 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     nCtx = ctx,
                     onProgress = object : com.selfmod.agent.offline.native.LocalLlmEngine.LoadCallback {
                         override fun onProgress(progress: Float) {
+                            _engineProgress.value = progress
                             val pct = (progress * 100).toInt().coerceIn(0, 100)
                             _engineStatus.value = warn + "正在加载模型… $pct%"
                         }
                     },
                 )
+                _engineProgress.value = -1f
                 if (ok) {
                     _engineReady.value = true
                     _engineStatus.value = warn + "已加载：${m.name}（ctx $ctx）"
@@ -359,6 +374,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 _engineStatus.value = "加载异常：${e.message}"
             } finally {
                 _engineBusy.value = false
+                _engineProgress.value = -1f
             }
         }
     }

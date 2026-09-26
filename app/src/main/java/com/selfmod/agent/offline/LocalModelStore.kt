@@ -117,26 +117,62 @@ class LocalModelStore(private val context: Context) {
      *
      * Strategy: (1) if the content URI already points at a readable real file
      * (common for Downloads / Documents via `_data`), use it directly — no copy,
-     * no extra disk. (2) otherwise copy into app storage.
+     * no extra disk. (2) otherwise copy into app storage, reporting progress.
+     *
+     * @param onProgress called with 0..1 during a copy, or -1f when no copy is
+     *                   needed (fast path). Never called after the function returns.
      */
-    fun materialize(id: String): File? {
+    fun materialize(id: String, onProgress: ((Float) -> Unit)? = null): File? {
         val m = find(id) ?: return null
 
         // 1) Try to resolve a real path from the content URI (no copy).
         resolveRealPath(Uri.parse(m.uri))?.let { p ->
             val f = File(p)
-            if (f.exists() && f.canRead()) return f
+            if (f.exists() && f.canRead()) {
+                onProgress?.invoke(-1f)
+                return f
+            }
         }
 
         // 2) Fall back to copying into app-private storage.
         val dest = File(modelsDir, sanitize(m.name))
-        if (dest.exists() && dest.length() == m.sizeBytes && dest.length() > 0) return dest
+        if (dest.exists() && dest.length() == m.sizeBytes && dest.length() > 0) {
+            onProgress?.invoke(1f)
+            return dest
+        }
         return runCatching {
+            val total = if (m.sizeBytes > 0) m.sizeBytes else -1L
+            val part = File(modelsDir, sanitize(m.name) + ".part")
             val input = context.contentResolver.openInputStream(Uri.parse(m.uri)) ?: return null
             input.use { ins ->
-                dest.outputStream().use { out -> ins.copyTo(out, 1 shl 20) }
+                part.outputStream().use { out ->
+                    val buf = ByteArray(1 shl 20)
+                    var copied = 0L
+                    var lastEmit = 0L
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                        copied += n
+                        // Throttle UI updates to ~every 16 MB.
+                        if (onProgress != null && total > 0 && copied - lastEmit >= (16L shl 20)) {
+                            lastEmit = copied
+                            onProgress(copied.toFloat() / total.toFloat())
+                        }
+                    }
+                    out.flush()
+                }
             }
-            dest
+            // Only publish the final file once the copy fully succeeded.
+            if (part.renameTo(dest)) {
+                onProgress?.invoke(1f)
+                dest
+            } else {
+                part.delete()
+                null
+            }
+        }.onFailure {
+            File(modelsDir, sanitize(m.name) + ".part").delete()
         }.getOrNull()
     }
 

@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,6 +54,7 @@ fun OfflineScreen(vm: AgentViewModel) {
     val engineStatus by vm.engineStatus.collectAsState()
     val engineBusy by vm.engineBusy.collectAsState()
     val engineReady by vm.engineReady.collectAsState()
+    val engineProgress by vm.engineProgress.collectAsState()
     val selfTest by vm.selfTest.collectAsState()
     val selfTesting by vm.selfTesting.collectAsState()
     val cfg = vm.config()
@@ -193,6 +195,14 @@ fun OfflineScreen(vm: AgentViewModel) {
         }
         if (engineStatus.isNotBlank()) {
             Text(engineStatus, color = if (engineReady) AccentGreen else AccentAmber, fontSize = 12.sp)
+        }
+        if (engineProgress >= 0f) {
+            Spacer(Modifier.height(4.dp))
+            LinearProgressIndicator(
+                progress = { engineProgress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = AccentBlue,
+            )
         }
         if (selfTest.isNotBlank()) {
             Column(
