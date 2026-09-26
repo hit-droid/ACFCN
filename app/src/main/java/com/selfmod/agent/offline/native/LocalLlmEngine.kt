@@ -90,8 +90,11 @@ class LocalLlmEngine {
         }
         val roles = messages.map { it.first }.toTypedArray()
         val contents = messages.map { it.second }.toTypedArray()
-        val tmpl = nativeChatTemplate()
-        com.selfmod.agent.util.Diagnostics.log("engine", "chat: template=$tmpl maxTokens=$maxTokens")
+        val rawTmpl = nativeChatTemplate()
+        val tmpl = resolveTemplateName(rawTmpl)
+        com.selfmod.agent.util.Diagnostics.log(
+            "engine", "chat: rawTemplate=${rawTmpl.take(40)}… resolved=$tmpl maxTokens=$maxTokens",
+        )
         val t0 = System.currentTimeMillis()
         val first = java.util.concurrent.atomic.AtomicBoolean(true)
         val wrapped = object : TokenCallback {
@@ -139,6 +142,30 @@ class LocalLlmEngine {
 
     /** The chat template the model reports (falls back to "chatml"). */
     fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
+
+    /**
+     * llama.cpp's llama_chat_apply_template only accepts a *name* of a built-in
+     * template, never a raw Jinja string. Models embed a full Jinja template in
+     * their metadata, so we must map it back to the closest built-in family.
+     */
+    private fun resolveTemplateName(raw: String): String {
+        if (raw.isBlank()) return "chatml"
+        // Already a plain built-in name?
+        val known = setOf("chatml", "gemma", "llama3", "llama2", "mistral", "vicuna", "alpaca", "zephyr", "phi3", "qwen", "deepseek", "command-r", "openchat")
+        val lower = raw.trim().lowercase()
+        if (lower in known) return lower
+        // Sniff a family from the Jinja content.
+        return when {
+            raw.contains("<start_of_turn>") -> "gemma"
+            raw.contains("<|start_header_id|>") -> "llama3"
+            raw.contains("<|im_start|>") -> "chatml"
+            raw.contains("[INST]") -> "mistral"
+            raw.contains("<|endoftext|>") && raw.contains("Human:") -> "chatml"
+            raw.contains("<|user|>") && raw.contains("<|assistant|>") -> "phi3"
+            raw.contains("<|im_start|>") -> "chatml"
+            else -> "chatml"
+        }
+    }
 
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
