@@ -31,6 +31,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
 import com.selfmod.agent.offline.LocalModel
@@ -57,8 +59,10 @@ fun OfflineScreen(vm: AgentViewModel) {
     val engineProgress by vm.engineProgress.collectAsState()
     val selfTest by vm.selfTest.collectAsState()
     val selfTesting by vm.selfTesting.collectAsState()
+    val diagnostics by vm.diagnostics.collectAsState()
     val cfg = vm.config()
     var note by remember { mutableStateOf<String?>(null) }
+    val clipboard = LocalClipboardManager.current
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
@@ -212,6 +216,26 @@ fun OfflineScreen(vm: AgentViewModel) {
                 Spacer(Modifier.height(4.dp))
                 Text(selfTest, color = TextPrimary, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("诊断日志", color = TextPrimary, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = { clipboard.setText(AnnotatedString(diagnostics)) }) { Text("复制全部", fontSize = 12.sp) }
+            TextButton(onClick = { vm.refreshDiagnostics() }) { Text("刷新", fontSize = 12.sp) }
+            TextButton(onClick = { vm.clearDiagnostics() }) { Text("清空", fontSize = 12.sp) }
+        }
+        if (diagnostics.isNotBlank() && diagnostics != "（暂无日志）") {
+            Column(
+                Modifier.fillMaxWidth().height(180.dp).background(SurfaceVariant, RoundedCornerShape(8.dp))
+                    .verticalScroll(rememberScrollState()).padding(10.dp),
+            ) {
+                Text(diagnostics, color = TextPrimary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            }
+        } else {
+            Text(
+                "点「刷新」查看最近日志。加载模型后把这里的内容复制发我，就能定位问题。",
+                color = TextSecondary, fontSize = 11.sp,
+            )
         }
 
         Spacer(Modifier.height(4.dp))

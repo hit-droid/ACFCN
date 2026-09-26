@@ -299,6 +299,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _engineBusy.value = true
             _engineStatus.value = "正在检查设备…"
+            com.selfmod.agent.util.Diagnostics.log(
+                "load", "开始加载 ${m.name} size=${m.sizeBytes / (1024 * 1024)}MB uri=${m.uri}",
+            )
             try {
                 app.engine.unload()
                 _engineReady.value = false
@@ -336,8 +339,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } ?: run {
                     _engineStatus.value = "无法读取模型文件"
+                    com.selfmod.agent.util.Diagnostics.log("load", "materialize 返回 null")
                     return@launch
                 }
+                com.selfmod.agent.util.Diagnostics.log(
+                    "load", "文件就绪 ${file.absolutePath} size=${file.length() / (1024 * 1024)}MB",
+                )
                 _engineProgress.value = -1f
                 _engineStatus.value = warn + "正在加载到内存（mmap 映射，通常更快）…"
                 // Keep the KV cache modest; a huge context on a low-RAM phone
@@ -408,6 +415,18 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     val selfTest: StateFlow<String> = _selfTest.asStateFlow()
     private val _selfTesting = MutableStateFlow(false)
     val selfTesting: StateFlow<Boolean> = _selfTesting.asStateFlow()
+
+    private val _diagnostics = MutableStateFlow("")
+    val diagnostics: StateFlow<String> = _diagnostics.asStateFlow()
+
+    fun refreshDiagnostics() {
+        _diagnostics.value = com.selfmod.agent.util.Diagnostics.dump()
+    }
+
+    fun clearDiagnostics() {
+        com.selfmod.agent.util.Diagnostics.clear()
+        _diagnostics.value = "（暂无日志）"
+    }
 
     /** Runs a minimal on-device inference and reports diagnostics. */
     fun runEngineSelfTest() {

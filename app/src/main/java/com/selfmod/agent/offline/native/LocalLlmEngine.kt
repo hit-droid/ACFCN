@@ -35,9 +35,22 @@ class LocalLlmEngine {
         nThreads: Int = 0,
         onProgress: LoadCallback? = null,
     ): Boolean {
-        if (!modelFile.exists()) return false
+        if (!modelFile.exists()) {
+            com.selfmod.agent.util.Diagnostics.log("engine", "load: 文件不存在 ${modelFile.absolutePath}")
+            return false
+        }
         val threads = if (nThreads > 0) nThreads else defaultThreads()
+        com.selfmod.agent.util.Diagnostics.log(
+            "engine",
+            "load: ${modelFile.name} size=${modelFile.length() / (1024 * 1024)}MB " +
+                "nCtx=$nCtx threads=$threads exists=${modelFile.canRead()}",
+        )
+        val t0 = System.currentTimeMillis()
         loaded = nativeInit(modelFile.absolutePath, nCtx, threads, onProgress)
+        com.selfmod.agent.util.Diagnostics.log(
+            "engine",
+            "load 返回 $loaded，耗时 ${System.currentTimeMillis() - t0}ms",
+        )
         return loaded
     }
 
@@ -71,13 +84,33 @@ class LocalLlmEngine {
         onToken: TokenCallback? = null,
         timeoutMs: Long = 120_000,
     ): Int {
-        if (!isLoaded()) return -1
+        if (!isLoaded()) {
+            com.selfmod.agent.util.Diagnostics.log("engine", "chat: 未加载")
+            return -1
+        }
         val roles = messages.map { it.first }.toTypedArray()
         val contents = messages.map { it.second }.toTypedArray()
         val tmpl = nativeChatTemplate()
-        return runWithWatchdog(timeoutMs) {
-            nativeChat(tmpl, roles, contents, maxTokens, temperature, topK, topP, onToken)
+        com.selfmod.agent.util.Diagnostics.log("engine", "chat: template=$tmpl maxTokens=$maxTokens")
+        val t0 = System.currentTimeMillis()
+        val first = java.util.concurrent.atomic.AtomicBoolean(true)
+        val wrapped = object : TokenCallback {
+            override fun onToken(piece: String): Boolean {
+                if (first.compareAndSet(true, false)) {
+                    com.selfmod.agent.util.Diagnostics.log(
+                        "engine", "chat: 首 token 耗时 ${System.currentTimeMillis() - t0}ms",
+                    )
+                }
+                return onToken?.onToken(piece) ?: true
+            }
         }
+        val code = runWithWatchdog(timeoutMs) {
+            nativeChat(tmpl, roles, contents, maxTokens, temperature, topK, topP, wrapped)
+        }
+        com.selfmod.agent.util.Diagnostics.log(
+            "engine", "chat: 返回 $code，总耗时 ${System.currentTimeMillis() - t0}ms",
+        )
+        return code
     }
 
     /**
