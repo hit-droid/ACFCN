@@ -280,5 +280,36 @@ fun ConfigScreen(vm: AgentViewModel) {
                 }
             }
         }
+
+        Spacer(Modifier.height(8.dp))
+        Text("存储空间", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
+        val usage = remember(tick) { vm.storageUsage() }
+        val total = remember(tick) { vm.storageTotal() }
+        val free = remember(tick) { vm.storageFree() }
+        Column(
+            Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(Modifier.fillMaxWidth()) {
+                Text("App 占用", color = TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text(com.selfmod.agent.util.StorageStats.human(total), color = AccentBlue, fontSize = 13.sp)
+            }
+            Text("设备剩余 ${com.selfmod.agent.util.StorageStats.human(free)}", color = TextSecondary, fontSize = 12.sp)
+            usage.filter { it.bytes > 0 }.forEach { u ->
+                Row(Modifier.fillMaxWidth()) {
+                    Text(u.label, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    Text(com.selfmod.agent.util.StorageStats.human(u.bytes), color = TextSecondary, fontSize = 12.sp)
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { vm.clearCache(); tick++ }) { Text("清理缓存", fontSize = 12.sp) }
+            OutlinedButton(onClick = { vm.clearModelCopies(); tick++ }) { Text("删除模型副本", fontSize = 12.sp) }
+            OutlinedButton(onClick = { vm.clearScriptVersions(); tick++ }) { Text("清理版本", fontSize = 12.sp) }
+        }
+        val storageMsg by vm.storageMsg.collectAsState()
+        if (storageMsg.isNotBlank()) {
+            Text(storageMsg, color = AccentGreen, fontSize = 12.sp)
+        }
     }
 }

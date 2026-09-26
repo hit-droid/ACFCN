@@ -1,12 +1,36 @@
-# Keep Rhino script host interfaces
+# ---- Rhino script host ----
 -keep class org.mozilla.javascript.** { *; }
--keep class com.selfmod.agent.script.** { *; }
--keep class com.selfmod.agent.plugin.** { *; }
+-dontwarn org.mozilla.javascript.**
 
-# Keep plugin interface so dex plugins can implement it
--keep class com.selfmod.agent.plugin.SelfModPlugin { *; }
+# ---- App classes touched via JNI / reflection / plugins ----
+# JNI bridge: method names must not be renamed.
+-keepclasseswithmembernames class com.selfmod.agent.offline.native.** { native <methods>; }
+-keep class com.selfmod.agent.offline.native.LocalLlmEngine { *; }
+-keep class com.selfmod.agent.offline.native.LocalLlmEngine$TokenCallback { *; }
+-keep class com.selfmod.agent.offline.native.LocalLlmEngine$LoadCallback { *; }
+
+# Script sandbox API
+-keep class com.selfmod.agent.script.** { *; }
+
+# Plugin system: dex plugins implement this interface by name.
+-keep class com.selfmod.agent.plugin.** { *; }
+-keep interface com.selfmod.agent.plugin.SelfModPlugin { *; }
 -keep class * implements com.selfmod.agent.plugin.SelfModPlugin { *; }
 
-# OkHttp
+# ---- OkHttp / Okio ----
 -dontwarn okhttp3.**
 -dontwarn okio.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+
+# ---- androidx.security-crypto / Tink (reflection heavy) ----
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+
+# Keep enum values used by JSON serialization
+-keepclassmembers enum * { *; }
+
+# Keep line numbers for readable crash reports
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

@@ -105,7 +105,24 @@ class LocalModelStore(private val context: Context) {
     }
 
     fun remove(id: String) {
+        val m = find(id)
         persist(list().filter { it.id != id })
+        // Also delete the copied weight file (and any partial) to reclaim space.
+        m?.let {
+            runCatching { File(modelsDir, sanitize(it.name)).delete() }
+            runCatching { File(modelsDir, sanitize(it.name) + ".part").delete() }
+        }
+    }
+
+    /** Total bytes currently used by copied model files. */
+    fun copiedBytes(): Long =
+        modelsDir.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L
+
+    /** Deletes every copied weight file (keeps the registry entries). */
+    fun deleteAllCopies(): Long {
+        val freed = copiedBytes()
+        modelsDir.listFiles()?.forEach { runCatching { it.delete() } }
+        return freed
     }
 
     fun find(id: String): LocalModel? = list().firstOrNull { it.id == id }

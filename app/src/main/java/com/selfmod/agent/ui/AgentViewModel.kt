@@ -428,6 +428,37 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         _diagnostics.value = "（暂无日志）"
     }
 
+    // ---- storage ----
+
+    fun storageUsage(): List<com.selfmod.agent.util.DirUsage> = app.storage.usage()
+    fun storageTotal(): Long = app.storage.total()
+    fun storageFree(): Long = app.storage.freeDisk()
+
+    private val _storageMsg = MutableStateFlow("")
+    val storageMsg: StateFlow<String> = _storageMsg.asStateFlow()
+
+    fun clearCache() {
+        val freed = app.storage.clearCache()
+        _storageMsg.value = "已清理缓存，释放 ${com.selfmod.agent.util.StorageStats.human(freed)}"
+    }
+
+    fun clearModelCopies() {
+        val freed = app.storage.clearModelCopies()
+        app.engine.unload()
+        _engineReady.value = false
+        _storageMsg.value = "已删除模型副本，释放 ${com.selfmod.agent.util.StorageStats.human(freed)}"
+    }
+
+    fun clearScriptVersions() {
+        val freed = app.storage.clearScriptVersions()
+        _storageMsg.value = "已清理历史版本，释放 ${com.selfmod.agent.util.StorageStats.human(freed)}"
+    }
+
+    fun clearSession() {
+        runCatching { app.sessions.clear() }
+        _storageMsg.value = "已清空会话记录"
+    }
+
     /** Runs a minimal on-device inference and reports diagnostics. */
     fun runEngineSelfTest() {
         if (_selfTesting.value) return
