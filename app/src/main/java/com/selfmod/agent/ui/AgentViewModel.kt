@@ -386,6 +386,53 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _selfTest = MutableStateFlow("")
+    val selfTest: StateFlow<String> = _selfTest.asStateFlow()
+    private val _selfTesting = MutableStateFlow(false)
+    val selfTesting: StateFlow<Boolean> = _selfTesting.asStateFlow()
+
+    /** Runs a minimal on-device inference and reports diagnostics. */
+    fun runEngineSelfTest() {
+        if (_selfTesting.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _selfTesting.value = true
+            val sb = StringBuilder()
+            try {
+                if (!app.engine.isLoaded()) {
+                    _selfTest.value = "未加载模型。请先在某个模型上点「在本机加载」。"
+                    return@launch
+                }
+                sb.appendLine("引擎已加载 ✓")
+                sb.appendLine("chat 模板: ${app.engine.chatTemplate()}")
+                sb.appendLine("上下文: ${app.engine.contextSize()}")
+                sb.appendLine()
+
+                val t0 = System.currentTimeMillis()
+                val out = StringBuilder()
+                val code = app.engine.chat(
+                    messages = listOf("user" to "Say hello in one short sentence."),
+                    maxTokens = 32,
+                    temperature = 0.2f,
+                    onToken = object : com.selfmod.agent.offline.native.LocalLlmEngine.TokenCallback {
+                        override fun onToken(piece: String): Boolean {
+                            out.append(piece)
+                            return true
+                        }
+                    },
+                )
+                val dt = System.currentTimeMillis() - t0
+                sb.appendLine("推理返回码: $code")
+                sb.appendLine("耗时: ${dt}ms")
+                sb.appendLine("输出: ${out.toString().ifBlank { "（空！模型没有产生任何 token）" }}")
+            } catch (e: Throwable) {
+                sb.appendLine("自检异常: ${e.message}")
+            } finally {
+                _selfTest.value = sb.toString()
+                _selfTesting.value = false
+            }
+        }
+    }
+
     data class ScriptRunResult(val logs: String, val error: String?, val value: String?)
 
     private val _scriptOutput = MutableStateFlow<ScriptRunResult?>(null)

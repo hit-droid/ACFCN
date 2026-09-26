@@ -79,6 +79,9 @@ class LocalLlmEngine {
 
     fun contextSize(): Int = nativeContextSize()
 
+    /** The chat template the model reports (falls back to "chatml"). */
+    fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
+
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
         return cores.coerceIn(2, 6)
