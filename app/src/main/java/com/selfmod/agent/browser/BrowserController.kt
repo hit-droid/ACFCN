@@ -1,5 +1,6 @@
 package com.selfmod.agent.browser
 
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.webkit.WebChromeClient
@@ -71,6 +72,10 @@ class BrowserController(
     /** Refuses to act on element ids the model was never shown (H7). */
     private val guard = SnapshotGuard()
 
+    /** State awaiting a WebView; consumed by the next [attach] (M12). */
+    private var pendingRestore: Bundle? = null
+    private var pendingRestoreUrl: String? = null
+
     fun attach(wv: WebView) {
         if (webView === wv) return
         webView = wv
@@ -124,9 +129,64 @@ class BrowserController(
                 wv.context.startActivity(intent)
             }
         }
-        if (_url.value == "about:blank" || _url.value.isBlank()) {
+        if (pendingRestore != null) {
+            applyRestore(wv)
+        } else if (_url.value == "about:blank" || _url.value.isBlank()) {
             wv.loadUrl(HOME)
         }
+    }
+
+    /**
+     * Writes the shared WebView's state into the Activity's bundle so a process
+     * death does not drop the user and the agent back to the homepage (M12).
+     */
+    fun saveState(out: Bundle) {
+        val wv = webView ?: return
+        val current = _url.value
+        if (current.isBlank() || current == "about:blank") return
+        out.putString(KEY_RESTORE_URL, current)
+        runCatching { wv.saveState(out) }
+    }
+
+    /**
+     * Queues state captured by [saveState]. The WebView does not exist yet when
+     * the Activity is created, so it is applied on the next [attach].
+     */
+    fun restoreState(saved: Bundle?) {
+        if (saved == null) return
+        pendingRestoreUrl = saved.getString(KEY_RESTORE_URL)
+        if (pendingRestoreUrl.isNullOrBlank()) return
+        pendingRestore = saved
+        val wv = webView
+        if (wv != null) applyRestore(wv)
+    }
+
+    private fun applyRestore(wv: WebView) {
+        val saved = pendingRestore ?: return
+        val fallback = pendingRestoreUrl ?: return
+        // WebView.restoreState returns the restored back/forward list, or null if
+        // the view is not attached to a window yet.
+        val list = runCatching { wv.restoreState(saved) }.getOrNull()
+        pendingRestore = null
+        val url = list?.currentItem?.url
+        if (!url.isNullOrBlank()) {
+            _url.value = url
+            pendingRestoreUrl = null
+        } else {
+            // Reload the saved URL without history/form state.
+            wv.loadUrl(fallback)
+        }
+    }
+
+    /** Releases the WebView when its host is gone; wakes any waiting agent call. */
+    fun destroy() {
+        val wv = webView ?: return
+        webView = null
+        pendingRestore = null
+        pendingRestoreUrl = null
+        guard.invalidate()
+        abortWaits()
+        runCatching { wv.destroy() }
     }
 
     /** Draws a small pulsing marker where the agent last acted. */
@@ -463,6 +523,7 @@ class BrowserController(
 
     companion object {
         const val HOME = "https://duckduckgo.com"
+        private const val KEY_RESTORE_URL = "acfcn.webview.url"
         private const val DESKTOP_UA =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 

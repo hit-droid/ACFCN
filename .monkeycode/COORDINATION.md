@@ -21,6 +21,7 @@
 - [opencode] `main`(已推 da5d129) | `llm/`, `agent/`, `util/` | 2026-10-02 | — | 已完成：M6/L8/L6 修复
 - [opencode] `feat/ondevice-cancel` | `cpp/`, `offline/`, `llm/`, `agent/` | 2026-10-03 | 当天 | 已合并（PR #1, merge c9b47f4）
 - [Qoder] `fix/browser-h6-h7-index` | `browser/`, `ui/`(仅 AgentViewModel/BrowserScreen) | 2026-10-03 | 当天 | PR 待合并：**未碰 `cpp/` 与 `offline/`**
+- [Qoder] 下一步 `fix/webview-lifecycle`(M12) | `browser/`, `ui/BrowserScreen.kt`, `MainActivity.kt` | 2026-10-03 | 当天 | 协商认领：`MainActivity.kt` 不在第 3 节表内，且 PR #1 未触碰它，如 opencode 需要请在本板回一句
 
 ---
 
@@ -85,7 +86,7 @@
 - [ ] M9 端侧过滤 `tool` 角色消息时静默丢弃
 - [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环
 - [@Qoder] M11 `BrowserController.onMainSync` 超时返回 `null as T` 可能 NPE — 分支 `fix/browser-h6-h7-index`
-- [ ] M12 WebView 无 saveState/restoreState/destroy，进程被杀丢页
+- [@Qoder] M12 WebView 无 saveState/restoreState/destroy，进程被杀丢页 — 堆叠分支 `fix/webview-lifecycle`(基于 PR #2)
 - [ ] M13 `LocalLlmEngine.load/unload` 无同步，并发加载泄漏 GlobalRef
 - [ ] M14 CrashHandler 无法捕获 native SIGSEGV
 - [ ] M15 测试覆盖不足：AgentCore/LlmClient/LocalLlmEngine 零测试
