@@ -1,6 +1,8 @@
 package com.selfmod.agent.llm
 
+import com.selfmod.agent.offline.ContextBudget
 import com.selfmod.agent.offline.native.LocalLlmEngine
+import com.selfmod.agent.util.Diagnostics
 import com.selfmod.agent.util.JsonUtil
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
@@ -74,9 +76,15 @@ class LlmClient(
         val engine = onDevice ?: throw LlmException(503, "端侧推理引擎不可用")
         if (cancelled()) throw LlmException(499, "cancelled")
         if (!engine.isLoaded()) throw LlmException(503, "端侧模型未加载，请在离线页加载模型")
-        // M9: `tool` results are folded into marked user turns instead of being
-        // silently dropped (OnDevicePrompts keeps every message).
-        val pairs = OnDevicePrompts.fold(messages)
+        val folded = OnDevicePrompts.fold(messages)
+        val budget = ContextBudget.promptBudget(engine.contextSize(), config.maxTokens)
+        val pairs = ContextBudget.trim(folded, budget)
+        if (pairs.size < folded.size) {
+            Diagnostics.log(
+                "engine",
+                "chat: 历史裁剪 ${folded.size} -> ${pairs.size} 条（预算 ${budget} tokens）",
+            )
+        }
         val sb = StringBuilder()
         val code = engine.chat(
             messages = pairs,
@@ -101,6 +109,13 @@ class LlmClient(
                 504,
                 "端侧推理超时（长时间没有新 token）。多半是模型太大、内存不足导致系统在换页。" +
                     "请换更小的模型（如 1.5B/1B 的 Q4_K_M），或关闭其他 App 后重试。",
+            )
+        }
+        if (code == -5) {
+            throw LlmException(
+                413,
+                "上下文超长：对话历史加回复超出了模型的 n_ctx（当前 ${engine.contextSize()}）。" +
+                    "请清空会话、缩短输入，或提高端侧上下文大小后重新加载模型。",
             )
         }
         if (code < 0) {
