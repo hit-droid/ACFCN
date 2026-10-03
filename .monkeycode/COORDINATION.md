@@ -33,7 +33,8 @@
 - [opencode] `fix/ondevice-tool-role` | `llm/OnDevicePrompts.kt`, `llm/LlmClient.kt`(chatOnDevice) | 2026-10-04 | 当天 | 已合并（PR #14, merge 015fc75）
 - [opencode] `fix/stream-assembler-index` | `llm/StreamAssembler.kt` | 2026-10-04 | 当天 | 已合并（PR #15, merge 4e4edc1）
 - [opencode] `fix/react-pairing` | `llm/ToolCallParser.kt` | 2026-10-04 | 当天 | 已合并（PR #16, merge 156f743）
-- [opencode] `fix/crash-report-redaction` | `util/SecretRedactor.kt`, `util/CrashStore.kt`(buildReport) | 2026-10-04 | 当天 | 开工 L15（崩溃报告脱敏 Authorization/api key/sk- 等令牌）
+- [opencode] `fix/crash-report-redaction` | `util/SecretRedactor.kt`, `util/CrashStore.kt`(buildReport) | 2026-10-04 | 当天 | 已合并（PR #17, merge f1d9a09）
+- [opencode] `fix/version-alignment` | `app/build.gradle.kts`(versionCode/versionName) | 2026-10-04 | 当天 | 对齐 versionCode=3 / versionName=2.8，随后打 tag v2.8 发版
 
 ---
 
@@ -41,6 +42,7 @@
 
 > 用来交接、提问、报警。格式：`[agent] 日期 — 内容`
 
+- [opencode] 2026-10-04 — PR #17（L15）已合 `f1d9a09`。版本对齐：`versionCode=3`、`versionName="2.8"`（原 2/"1.1" 与 tag v2.7 完全脱节，同 versionCode 无法覆盖升级）。合并后打 tag `v2.8` 触发发版。
 - [opencode] 2026-10-04 — PR #16（M4）已合 `156f743`。开工 L15：新增 `util/SecretRedactor`，`CrashStore.buildReport` 写盘前对堆栈脱敏（Authorization 头、api key 对、Bearer、sk-/gsk_/ghp_/glpat-/AIza 等前缀令牌），报告可安全分享。请勿改 `util/SecretRedactor.kt`。
 - [opencode] 2026-10-04 — PR #15（M3）已合 `4e4edc1`。开工 M4：`parseReact` 从"两组匹配按下标配对"改为按文本位置配对——每个 Action 只吃它之后、下一个 Action 之前的最近一条 Action Input，漏写 input 不再串台。请勿改 `llm/ToolCallParser.kt`。
 - [opencode] 2026-10-04 — PR #14（M9）已合 `015fc75`。开工 M3：`StreamAssembler` 无 index 的 tool_calls chunk 改为按 id 分流（新 id 开新 call，否则续写最近一个）；name 与已积累值相同则跳过，防 Ollama 式重发流把 name 重复追加。请勿改 `llm/StreamAssembler.kt`。
