@@ -1,6 +1,7 @@
 package com.selfmod.agent.agent
 
 import com.selfmod.agent.browser.BrowserController
+import com.selfmod.agent.browser.BrowserOutcome
 import com.selfmod.agent.llm.ToolSpec
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.plugin.PluginRegistry
@@ -345,10 +346,19 @@ object Tools {
 
     // ----------------------------------------------------------- browser
 
+    /**
+     * L3: browser replies used to be free-form text (`loaded url=…`, `clicked #3 A`,
+     * `typed 3`, a bare page dump, `ERROR: …`), so the model had to guess which shape
+     * it was looking at and a stale-index refusal read like page content. Everything
+     * the browser tools return now goes through this one envelope.
+     */
+    private fun browserResult(raw: String) = BrowserOutcome.classify(raw).envelope()
+
     private fun browserOpen(browser: BrowserController) = ToolDef(
         spec = ToolSpec(
             name = "browser_open",
-            description = "Navigate the in-app browser to a URL or search query. User and agent share the same WebView.",
+            description = "Navigate the in-app browser to a URL or search query. User and agent share the same WebView. " +
+                "Returns {ok, status:loaded|navigating|timeout|cancelled|error, url, title, data:<snapshot>}.",
             parameters = """{"type":"object","properties":{"url":{"type":"string","description":"URL or search query"}},"required":["url"]}""",
         ),
         run = { args ->
@@ -356,51 +366,54 @@ object Tools {
                 JSONObject(args).optString("input")
             }
             if (url.isBlank()) ToolRegistry.errJson("url required")
-            else browser.navigate(url)
+            else browserResult(browser.navigate(url))
         },
     )
 
     private fun browserSnapshot(browser: BrowserController) = ToolDef(
         spec = ToolSpec(
             name = "browser_snapshot",
-            description = "Take a snapshot of the current page: URL, title, readable text, and numbered interactive elements. Use the index with browser_click / browser_type.",
+            description = "Take a snapshot of the current page: URL, title, readable text, and numbered interactive elements. " +
+                "Use the index with browser_click / browser_type. Returns {ok, status, data:<snapshot>}.",
             parameters = """{"type":"object","properties":{}}""",
         ),
-        run = { browser.snapshot() },
+        run = { browserResult(browser.snapshot()) },
     )
 
     private fun browserClick(browser: BrowserController) = ToolDef(
         spec = ToolSpec(
             name = "browser_click",
-            description = "Click an interactive element by its snapshot index.",
+            description = "Click an interactive element by its snapshot index. " +
+                "A drifted index fails with ok=false — take a fresh browser_snapshot instead of retrying.",
             parameters = """{"type":"object","properties":{"index":{"type":"integer"}},"required":["index"]}""",
         ),
         run = { args ->
             val o = JSONObject(args)
             val idx = if (o.has("index")) o.getInt("index") else o.optInt("input", -1)
-            if (idx < 0) ToolRegistry.errJson("index required") else browser.click(idx)
+            if (idx < 0) ToolRegistry.errJson("index required") else browserResult(browser.click(idx))
         },
     )
 
     private fun browserType(browser: BrowserController) = ToolDef(
         spec = ToolSpec(
             name = "browser_type",
-            description = "Type text into an input/textarea identified by snapshot index.",
+            description = "Type text into an input/textarea identified by snapshot index. " +
+                "A drifted index fails with ok=false — take a fresh browser_snapshot instead of retrying.",
             parameters = """{"type":"object","properties":{"index":{"type":"integer"},"text":{"type":"string"}},"required":["index","text"]}""",
         ),
         run = { args ->
             val o = JSONObject(args)
-            browser.type(o.getInt("index"), o.optString("text"))
+            browserResult(browser.type(o.getInt("index"), o.optString("text")))
         },
     )
 
     private fun browserExtract(browser: BrowserController) = ToolDef(
         spec = ToolSpec(
             name = "browser_extract",
-            description = "Extract visible text of the current page.",
+            description = "Extract visible text of the current page. Returns {ok, status, data:<text>}.",
             parameters = """{"type":"object","properties":{}}""",
         ),
-        run = { browser.extractText() },
+        run = { browserResult(browser.extractText()) },
     )
 
     private fun browserScroll(browser: BrowserController) = ToolDef(
@@ -411,30 +424,30 @@ object Tools {
         ),
         run = { args ->
             val dir = JSONObject(args).optString("direction", "down")
-            browser.scroll(dir.ifBlank { "down" })
+            browserResult(browser.scroll(dir.ifBlank { "down" }))
         },
     )
 
     private fun browserEval(browser: BrowserController) = ToolDef(
         spec = ToolSpec(
             name = "browser_eval",
-            description = "Run JavaScript in the current page and return the result.",
+            description = "Run JavaScript in the current page. Returns {ok, status, data:<js result>}.",
             parameters = """{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}""",
         ),
         run = { args ->
             val o = JSONObject(args)
             val code = o.optString("code").ifBlank { o.optString("input") }
-            browser.evalJs(code)
+            browserResult(browser.evalJs(code))
         },
     )
 
     private fun browserBack(browser: BrowserController) = ToolDef(
         spec = ToolSpec(
             name = "browser_back",
-            description = "Go back in the in-app browser history.",
+            description = "Go back in the in-app browser history. Returns {ok, status:back, url, title}.",
             parameters = """{"type":"object","properties":{}}""",
         ),
-        run = { browser.goBack() },
+        run = { browserResult(browser.goBack()) },
     )
 
     private fun listLocalModels(models: LocalModelStore) = ToolDef(
