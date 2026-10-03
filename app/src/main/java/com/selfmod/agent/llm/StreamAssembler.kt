@@ -39,15 +39,14 @@ class StreamAssembler {
         delta.optJSONArray("tool_calls")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val tc = arr.optJSONObject(i) ?: continue
-                val idx = if (tc.has("index")) tc.optInt("index") else i
-                val acc = tools.getOrPut(idx) { ToolAcc() }
-                if (tc.has("id")) {
-                    val id = tc.optString("id")
-                    if (id.isNotBlank()) acc.id = id
-                }
+                val acc = tools.getOrPut(resolveIndex(tc)) { ToolAcc() }
+                val id = tc.optString("id")
+                if (id.isNotBlank() && id != acc.id) acc.id = id
                 val fn = tc.optJSONObject("function") ?: continue
                 val name = fn.optString("name")
-                if (name.isNotBlank()) acc.name += name
+                if (name.isNotBlank() && name != acc.name) {
+                    acc.name = if (acc.name.isBlank()) name else acc.name + name
+                }
                 acc.args += fn.optString("arguments")
             }
         }
@@ -67,6 +66,19 @@ class StreamAssembler {
             raw = raw,
             finishReason = if (calls.isNotEmpty() && finishReason == "stop") "tool_calls" else finishReason,
         )
+    }
+
+    /**
+     * Some OpenAI-compatible providers omit `index` and send one single-element
+     * `tool_calls` array per SSE chunk (Ollama & friends), where the array
+     * position is meaningless: a chunk carrying a fresh id starts a new call,
+     * anything else continues the most recent one (M3).
+     */
+    private fun resolveIndex(tc: JSONObject): Int {
+        if (tc.has("index")) return tc.optInt("index")
+        val last = tools.keys.maxOrNull() ?: return 0
+        val id = tc.optString("id")
+        return if (id.isNotBlank() && id != tools[last]!!.id) last + 1 else last
     }
 
     private class ToolAcc {
