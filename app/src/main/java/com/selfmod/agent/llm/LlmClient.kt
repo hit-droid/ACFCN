@@ -2,25 +2,37 @@ package com.selfmod.agent.llm
 
 import com.selfmod.agent.offline.native.LocalLlmEngine
 import com.selfmod.agent.util.JsonUtil
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class LlmClient(
     private val client: OkHttpClient = defaultClient(),
     private val onDevice: LocalLlmEngine? = null,
 ) {
     private val json = "application/json; charset=utf-8".toMediaType()
+    private val inFlight = AtomicReference<Call?>(null)
+    private val httpAbort = AtomicBoolean(false)
 
     fun cancel() {
+        httpAbort.set(true)
         onDevice?.cancel()
+        inFlight.get()?.cancel()
     }
 
     fun clearAbort() {
+        httpAbort.set(false)
         onDevice?.clearAbort()
     }
 
@@ -117,23 +129,18 @@ class LlmClient(
         val streaming = onDelta != null
         val body = buildBody(config, messages, tools, stream = streaming).toString()
         val req = request(config, config.baseUrl.trimEnd('/') + "/chat/completions", body)
-        val call = client.newCall(req)
-        return try {
-            call.execute().use { resp ->
-                val rawHead = if (streaming) "" else resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) {
-                    val raw = if (streaming) resp.body?.string().orEmpty() else rawHead
-                    throw LlmException(resp.code, "LLM HTTP ${resp.code}: ${raw.take(800)}")
-                }
-                val result = if (streaming) {
-                    readSse(resp.body!!.source(), onDelta, cancelled)
-                } else {
-                    parseChatResponse(rawHead)
-                }
-                attachParsedTools(result, tools)
+        return executeCall(config, req, cancelled) { resp ->
+            val rawHead = if (streaming) "" else resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val raw = if (streaming) resp.body?.string().orEmpty() else rawHead
+                throw LlmException(resp.code, "LLM HTTP ${resp.code}: ${raw.take(800)}")
             }
-        } finally {
-            if (cancelled()) call.cancel()
+            val result = if (streaming) {
+                readSse(resp.body!!.source(), onDelta, cancelled)
+            } else {
+                parseChatResponse(rawHead)
+            }
+            attachParsedTools(result, tools)
         }
     }
 
@@ -161,47 +168,42 @@ class LlmClient(
             )
             .toString()
         val req = request(config, "$root/api/chat", body)
-        val call = client.newCall(req)
-        return try {
-            call.execute().use { resp ->
-                val raw = if (!streaming) resp.body?.string().orEmpty() else ""
-                if (!resp.isSuccessful) {
-                    val err = if (streaming) resp.body?.string().orEmpty() else raw
-                    throw LlmException(resp.code, "Ollama HTTP ${resp.code}: ${err.take(400)}")
-                }
-                if (streaming) {
-                    val assembler = StreamAssembler()
-                    val source = resp.body!!.source()
-                    while (!source.exhausted()) {
-                        if (cancelled()) throw LlmException(499, "cancelled")
-                        val line = source.readUtf8Line() ?: break
-                        if (line.isBlank()) continue
-                        val obj = runCatching { JSONObject(line) }.getOrNull() ?: continue
-                        val piece = obj.optJSONObject("message")?.optString("content").orEmpty()
-                        if (piece.isNotEmpty()) {
-                            assembler.applyJson(
-                                JSONObject()
-                                    .put(
-                                        "choices",
-                                        JSONArray().put(
-                                            JSONObject().put("delta", JSONObject().put("content", piece)),
-                                        ),
-                                    )
-                                    .toString(),
-                            )
-                            onDelta.invoke(piece)
-                        }
-                        if (obj.optBoolean("done")) break
-                    }
-                    attachParsedTools(assembler.result(), emptyList())
-                } else {
-                    val obj = JSONObject(raw)
-                    val content = obj.optJSONObject("message")?.optString("content").orEmpty()
-                    attachParsedTools(ChatResult(content = content, raw = raw), emptyList())
-                }
+        return executeCall(config, req, cancelled) { resp ->
+            val raw = if (!streaming) resp.body?.string().orEmpty() else ""
+            if (!resp.isSuccessful) {
+                val err = if (streaming) resp.body?.string().orEmpty() else raw
+                throw LlmException(resp.code, "Ollama HTTP ${resp.code}: ${err.take(400)}")
             }
-        } finally {
-            if (cancelled()) call.cancel()
+            if (streaming) {
+                val assembler = StreamAssembler()
+                val source = resp.body!!.source()
+                while (!source.exhausted()) {
+                    if (aborted(cancelled)) throw LlmException(499, "cancelled")
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank()) continue
+                    val obj = runCatching { JSONObject(line) }.getOrNull() ?: continue
+                    val piece = obj.optJSONObject("message")?.optString("content").orEmpty()
+                    if (piece.isNotEmpty()) {
+                        assembler.applyJson(
+                            JSONObject()
+                                .put(
+                                    "choices",
+                                    JSONArray().put(
+                                        JSONObject().put("delta", JSONObject().put("content", piece)),
+                                    ),
+                                )
+                                .toString(),
+                        )
+                        onDelta.invoke(piece)
+                    }
+                    if (obj.optBoolean("done")) break
+                }
+                attachParsedTools(assembler.result(), emptyList())
+            } else {
+                val obj = JSONObject(raw)
+                val content = obj.optJSONObject("message")?.optString("content").orEmpty()
+                attachParsedTools(ChatResult(content = content, raw = raw), emptyList())
+            }
         }
     }
 
@@ -221,24 +223,19 @@ class LlmClient(
             .put("stream", streaming)
             .toString()
         val req = request(config, "$root/completion", body)
-        val call = client.newCall(req)
-        return try {
-            call.execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val err = resp.body?.string().orEmpty()
-                    throw LlmException(resp.code, "llama.cpp HTTP ${resp.code}: ${err.take(400)}")
-                }
-                if (streaming) {
-                    attachParsedTools(readSse(resp.body!!.source(), onDelta, cancelled), emptyList())
-                } else {
-                    val raw = resp.body?.string().orEmpty()
-                    val obj = JSONObject(raw)
-                    val content = obj.optString("content").ifBlank { obj.optString("response") }
-                    attachParsedTools(ChatResult(content = content, raw = raw), emptyList())
-                }
+        return executeCall(config, req, cancelled) { resp ->
+            if (!resp.isSuccessful) {
+                val err = resp.body?.string().orEmpty()
+                throw LlmException(resp.code, "llama.cpp HTTP ${resp.code}: ${err.take(400)}")
             }
-        } finally {
-            if (cancelled()) call.cancel()
+            if (streaming) {
+                attachParsedTools(readSse(resp.body!!.source(), onDelta, cancelled), emptyList())
+            } else {
+                val raw = resp.body?.string().orEmpty()
+                val obj = JSONObject(raw)
+                val content = obj.optString("content").ifBlank { obj.optString("response") }
+                attachParsedTools(ChatResult(content = content, raw = raw), emptyList())
+            }
         }
     }
 
@@ -249,7 +246,7 @@ class LlmClient(
     ): ChatResult {
         val assembler = StreamAssembler()
         while (!source.exhausted()) {
-            if (cancelled()) throw LlmException(499, "cancelled")
+            if (aborted(cancelled)) throw LlmException(499, "cancelled")
             val line = source.readUtf8Line() ?: break
             val piece = assembler.applyLine(line)
             if (piece != null) onDelta?.invoke(piece)
@@ -369,13 +366,79 @@ class LlmClient(
         )
     }
 
+    private fun aborted(cancelled: () -> Boolean): Boolean = httpAbort.get() || cancelled()
+
+    private fun httpClient(config: LlmConfig): OkHttpClient {
+        val sec = config.timeoutSeconds.coerceIn(MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC)
+        return client.newBuilder()
+            .connectTimeout(sec.coerceAtMost(30), TimeUnit.SECONDS)
+            .readTimeout(sec, TimeUnit.SECONDS)
+            .writeTimeout(sec.coerceAtMost(60), TimeUnit.SECONDS)
+            .callTimeout(sec, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun <T> executeCall(
+        config: LlmConfig,
+        req: Request,
+        cancelled: () -> Boolean,
+        body: (Response) -> T,
+    ): T {
+        val call = httpClient(config).newCall(req)
+        inFlight.set(call)
+        try {
+            if (aborted(cancelled)) {
+                call.cancel()
+                throw LlmException(499, "cancelled")
+            }
+            call.execute().use { resp ->
+                if (aborted(cancelled)) throw LlmException(499, "cancelled")
+                return body(resp)
+            }
+        } catch (e: LlmException) {
+            throw e
+        } catch (e: IOException) {
+            if (aborted(cancelled)) {
+                throw LlmException(499, "cancelled")
+            }
+            if (isTimeout(e)) {
+                throw LlmException(
+                    504,
+                    "请求超时（${config.timeoutSeconds.coerceIn(MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC)}s）。请提高超时，或检查网络/本机服务是否卡住。",
+                )
+            }
+            if (call.isCanceled()) {
+                throw LlmException(499, "cancelled")
+            }
+            throw LlmException(502, "网络错误：${e.message}")
+        } finally {
+            inFlight.compareAndSet(call, null)
+            if (aborted(cancelled)) call.cancel()
+        }
+    }
+
     companion object {
+        private const val MIN_TIMEOUT_SEC = 5L
+        private const val MAX_TIMEOUT_SEC = 600L
+
         fun defaultClient() = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(180, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
+
+        internal fun isTimeout(e: Throwable): Boolean {
+            var cur: Throwable? = e
+            while (cur != null) {
+                if (cur is SocketTimeoutException) return true
+                if (cur is InterruptedIOException && cur.message.orEmpty().contains("timeout", ignoreCase = true)) {
+                    return true
+                }
+                cur = cur.cause
+            }
+            return false
+        }
     }
 }
 
