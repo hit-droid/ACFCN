@@ -124,6 +124,16 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onInputTextChange(t: String) { _inputText.value = t }
 
+    /**
+     * Runs a ready-made prompt straight from the empty state (L4). Ignored while a
+     * run is in flight so a tap can't queue a second request behind the first.
+     */
+    fun sendPrompt(text: String) {
+        if (_busy.value || text.isBlank()) return
+        _inputText.value = text
+        send()
+    }
+
     fun send() {
         val text = _inputText.value.trim()
         if (text.isEmpty() || _busy.value) return
