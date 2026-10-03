@@ -23,7 +23,7 @@ class LocalLlmEngine {
     @Volatile
     private var loaded = false
 
-    fun isLoaded(): Boolean = loaded && nativeIsReady()
+    fun isLoaded(): Boolean = loaded && ensureLoaded() && nativeIsReady()
 
     /**
      * @param nCtx context window (tokens). Larger = more RAM. 1024 is safer on 6GB phones.
@@ -37,6 +37,10 @@ class LocalLlmEngine {
         nBatch: Int = 64,
         onProgress: LoadCallback? = null,
     ): Boolean {
+        if (!ensureLoaded()) {
+            com.selfmod.agent.util.Diagnostics.log("engine", "load: native 库不可用")
+            return false
+        }
         if (!modelFile.exists()) {
             com.selfmod.agent.util.Diagnostics.log("engine", "load: 文件不存在 ${modelFile.absolutePath}")
             return false
@@ -57,10 +61,25 @@ class LocalLlmEngine {
     }
 
     fun unload() {
-        if (loaded) {
-            nativeFree()
+        if (!ensureLoaded()) {
             loaded = false
+            return
         }
+        nativeCancel()
+        nativeFree()
+        loaded = false
+    }
+
+    /** Abort in-flight load or generate. Safe to call from any thread. */
+    fun cancel() {
+        if (!ensureLoaded()) return
+        nativeCancel()
+    }
+
+    /** Drop a leftover abort so the next request can start. */
+    fun clearAbort() {
+        if (!ensureLoaded()) return
+        nativeClearAbort()
     }
 
     /** Raw completion. Returns number of tokens emitted, negative on error. */
@@ -115,49 +134,13 @@ class LocalLlmEngine {
                 return onToken?.onToken(piece) ?: true
             }
         }
-        val code = runWithIdleWatchdog(timeoutMs, lastTokenAt, aborted) {
+        val code = IdleWatchdog.run(timeoutMs, lastTokenAt, aborted, { nativeCancel() }) {
             nativeChat(tmpl, useRoles, useContents, maxTokens, temperature, topK, topP, wrapped)
         }
         com.selfmod.agent.util.Diagnostics.log(
             "engine", "chat: 返回 $code，总耗时 ${System.currentTimeMillis() - t0}ms",
         )
         return code
-    }
-
-    /**
-     * Runs native work on a worker. Times out only after [idleMs] with no new
-     * tokens (prefill + decode). First token on a 6GB phone can take 30–90s;
-     * once tokens start flowing we keep waiting.
-     */
-    private fun runWithIdleWatchdog(
-        idleMs: Long,
-        lastTokenAt: java.util.concurrent.atomic.AtomicLong,
-        aborted: java.util.concurrent.atomic.AtomicBoolean,
-        block: () -> Int,
-    ): Int {
-        val result = java.util.concurrent.atomic.AtomicInteger(Int.MIN_VALUE)
-        val worker = Thread {
-            runCatching { result.set(block()) }
-        }
-        worker.isDaemon = true
-        worker.start()
-        val hardCap = (idleMs * 8).coerceAtMost(10 * 60_000L)
-        val started = System.currentTimeMillis()
-        while (worker.isAlive) {
-            worker.join(2_000)
-            if (!worker.isAlive) break
-            val idle = System.currentTimeMillis() - lastTokenAt.get()
-            val elapsed = System.currentTimeMillis() - started
-            if (idle >= idleMs || elapsed >= hardCap) {
-                aborted.set(true)
-                com.selfmod.agent.util.Diagnostics.log(
-                    "engine",
-                    "chat: 空闲超时 idle=${idle}ms elapsed=${elapsed}ms（请 native 尽快停，引擎保持加载）",
-                )
-                return -99
-            }
-        }
-        return result.get()
     }
 
     fun contextSize(): Int = nativeContextSize()
@@ -178,6 +161,8 @@ class LocalLlmEngine {
         progressCallback: LoadCallback?,
     ): Boolean
     private external fun nativeFree()
+    private external fun nativeCancel()
+    private external fun nativeClearAbort()
     private external fun nativeIsReady(): Boolean
     private external fun nativeGenerate(
         prompt: String, maxTokens: Int, temperature: Float, topK: Int,

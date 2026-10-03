@@ -498,6 +498,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 sb.appendLine("上下文: ${app.engine.contextSize()}")
                 sb.appendLine()
 
+                app.engine.clearAbort()
                 val t0 = System.currentTimeMillis()
                 val out = StringBuilder()
                 val code = app.engine.chat(

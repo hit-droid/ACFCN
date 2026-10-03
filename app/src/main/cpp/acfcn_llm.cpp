@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
+#include <atomic>
 #include <cstring>
 #include <chrono>
 #include <algorithm>
@@ -29,29 +31,41 @@ struct Engine {
     llama_model   *model = nullptr;
     llama_context *ctx   = nullptr;
     const llama_vocab *vocab = nullptr;
-    int n_ctx = 2048;
+    std::atomic<int> n_ctx {2048};
     int n_batch = 64;
     std::mutex mu;
-    bool ready = false;
-    // Progress reporting back to Kotlin during model load (0.0..1.0).
+    std::condition_variable cv;
+    std::atomic<bool> ready {false};
+    std::atomic<bool> abort_flag {false};
+    int inflight = 0;
+    int free_waiters = 0;
     jobject progressObj = nullptr;
     jmethodID progressMid = nullptr;
 };
 
 Engine g_engine;
 
+static bool abort_trampoline(void *data) {
+    Engine *e = static_cast<Engine *>(data);
+    return e != nullptr && e->abort_flag.load(std::memory_order_relaxed);
+}
+
 static bool progress_trampoline(float progress, void *user_data) {
     Engine *e = static_cast<Engine *>(user_data);
-    if (!e || !e->progressObj || !e->progressMid) return true;
+    if (!e) return true;
+    if (e->abort_flag.load(std::memory_order_relaxed)) return false;
+    if (!e->progressObj || !e->progressMid) return true;
     JNIEnv *env = nullptr;
     bool attached = false;
     if (g_jvm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK) {
-        if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return true;
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+            return !e->abort_flag.load(std::memory_order_relaxed);
+        }
         attached = true;
     }
     env->CallVoidMethod(e->progressObj, e->progressMid, (jfloat) progress);
     if (attached) g_jvm->DetachCurrentThread();
-    return true;
+    return !e->abort_flag.load(std::memory_order_relaxed);
 }
 
 std::string jstr(JNIEnv *env, jstring s) {
@@ -66,7 +80,15 @@ void free_locked() {
     if (g_engine.ctx)   { llama_free(g_engine.ctx); g_engine.ctx = nullptr; }
     if (g_engine.model) { llama_model_free(g_engine.model); g_engine.model = nullptr; }
     g_engine.vocab = nullptr;
-    g_engine.ready = false;
+    g_engine.ready.store(false);
+}
+
+void wait_idle_locked(std::unique_lock<std::mutex> &lock) {
+    g_engine.free_waiters++;
+    g_engine.abort_flag.store(true);
+    g_engine.cv.wait(lock, [] { return g_engine.inflight == 0; });
+    g_engine.free_waiters--;
+    g_engine.cv.notify_all();
 }
 
 // Emits one decoded piece to the Kotlin callback; returns false if generation
@@ -85,7 +107,9 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         JNIEnv *env, jobject /*thiz*/, jstring modelPath, jint nCtx, jint nThreads,
         jint nBatch, jobject progressCallback) {
-    std::lock_guard<std::mutex> lock(g_engine.mu);
+    std::unique_lock<std::mutex> lock(g_engine.mu);
+    wait_idle_locked(lock);
+    g_engine.abort_flag.store(false);
     free_locked();
 
     llama_backend_init();
@@ -148,9 +172,10 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         free_locked();
         return JNI_FALSE;
     }
-    g_engine.n_ctx = nCtx;
+    llama_set_abort_callback(g_engine.ctx, abort_trampoline, &g_engine);
+    g_engine.n_ctx.store(nCtx);
     g_engine.n_batch = batch;
-    g_engine.ready = true;
+    g_engine.ready.store(true);
     LOGI("engine ready, n_ctx=%d", nCtx);
     return JNI_TRUE;
 }
@@ -158,17 +183,31 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 extern "C" JNIEXPORT void JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeFree(
         JNIEnv * /*env*/, jobject /*thiz*/) {
-    std::lock_guard<std::mutex> lock(g_engine.mu);
+    std::unique_lock<std::mutex> lock(g_engine.mu);
+    wait_idle_locked(lock);
     if (g_engine.ctx || g_engine.model) {
         free_locked();
         llama_backend_free();
     }
+    g_engine.abort_flag.store(false);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeIsReady(
         JNIEnv * /*env*/, jobject /*thiz*/) {
-    return g_engine.ready ? JNI_TRUE : JNI_FALSE;
+    return g_engine.ready.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeCancel(
+        JNIEnv * /*env*/, jobject /*thiz*/) {
+    g_engine.abort_flag.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeClearAbort(
+        JNIEnv * /*env*/, jobject /*thiz*/) {
+    g_engine.abort_flag.store(false);
 }
 
 static jint generate_impl(
@@ -176,14 +215,38 @@ static jint generate_impl(
         const std::string &prompt,
         jint maxTokens, jfloat temperature, jint topK, jfloat topP) {
 
-    std::lock_guard<std::mutex> lock(g_engine.mu);
-    if (!g_engine.ready || !g_engine.ctx || !g_engine.vocab) {
-        LOGE("generate() called before init()");
-        return -1;
+    llama_context *ctx = nullptr;
+    const llama_vocab *vocab = nullptr;
+    int n_batch = 64;
+    {
+        std::unique_lock<std::mutex> lock(g_engine.mu);
+        g_engine.cv.wait(lock, [] {
+            return g_engine.inflight == 0 && g_engine.free_waiters == 0;
+        });
+        if (!g_engine.ready.load() || !g_engine.ctx || !g_engine.vocab) {
+            LOGE("generate() called before init()");
+            return -1;
+        }
+        g_engine.inflight++;
+        ctx = g_engine.ctx;
+        vocab = g_engine.vocab;
+        n_batch = g_engine.n_batch > 0 ? g_engine.n_batch : 64;
     }
 
-    const llama_vocab *vocab = g_engine.vocab;
-    llama_context *ctx = g_engine.ctx;
+    struct InflightGuard {
+        ~InflightGuard() {
+            std::lock_guard<std::mutex> lock(g_engine.mu);
+            if (g_engine.inflight > 0) g_engine.inflight--;
+            if (g_engine.free_waiters == 0) {
+                g_engine.abort_flag.store(false);
+            }
+            g_engine.cv.notify_all();
+        }
+    } guard;
+
+    auto aborted = []() {
+        return g_engine.abort_flag.load(std::memory_order_relaxed);
+    };
 
     jmethodID mid = nullptr;
     if (callback != nullptr) {
@@ -192,7 +255,6 @@ static jint generate_impl(
         env->DeleteLocalRef(cls);
     }
 
-    // Tokenize prompt (add_special = true so BOS is inserted when the model wants it).
     int n_prompt_max = prompt.size() + 64;
     std::vector<llama_token> tokens(n_prompt_max);
     int n_tokens = llama_tokenize(
@@ -212,10 +274,8 @@ static jint generate_impl(
     }
     tokens.resize(n_tokens);
 
-    // Fresh KV cache per request.
     llama_memory_clear(llama_get_memory(ctx), true);
 
-    // Sampler chain: top_k -> top_p -> temp -> dist
     llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
     llama_sampler *smpl = llama_sampler_chain_init(sparams);
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(topK));
@@ -225,64 +285,96 @@ static jint generate_impl(
 
     int emitted = 0;
     std::string piece_buf;
+    jint result = 0;
+    bool fail = false;
 
-    // Feed prompt in chunks of n_batch. Small batch on low-RAM phones
-    // avoids a 50s+ first-token stall from swapping.
-    const int n_batch = g_engine.n_batch > 0 ? g_engine.n_batch : 64;
     int pos = 0;
     LOGI("prefill start: %d prompt tokens", (int) tokens.size());
     auto prefill_t0 = std::chrono::steady_clock::now();
-    while (pos < (int) tokens.size()) {
+    while (!fail && pos < (int) tokens.size()) {
+        if (aborted()) {
+            LOGI("prefill cancelled at pos %d", pos);
+            result = -98;
+            fail = true;
+            break;
+        }
         int chunk = std::min(n_batch, (int) tokens.size() - pos);
         llama_batch batch = llama_batch_get_one(tokens.data() + pos, chunk);
-        if (llama_decode(ctx, batch) != 0) {
-            LOGE("prompt decode failed");
-            llama_sampler_free(smpl);
-            return -3;
+        int rc = llama_decode(ctx, batch);
+        if (rc == 2 || aborted()) {
+            LOGI("prefill aborted by llama at pos %d rc=%d", pos, rc);
+            result = -98;
+            fail = true;
+            break;
+        }
+        if (rc != 0) {
+            LOGE("prompt decode failed rc=%d", rc);
+            result = -3;
+            fail = true;
+            break;
         }
         pos += chunk;
     }
-    auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - prefill_t0).count();
-    LOGI("prefill done in %lld ms", (long long) prefill_ms);
 
-    std::vector<char> buf(256);
-    for (int i = 0; i < maxTokens; ++i) {
-        llama_token id = llama_sampler_sample(smpl, ctx, -1);
-        llama_sampler_accept(smpl, id);
+    if (!fail) {
+        auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - prefill_t0).count();
+        LOGI("prefill done in %lld ms", (long long) prefill_ms);
 
-        if (llama_vocab_is_eog(vocab, id)) {
-            LOGI("hit EOG at token %d", i);
-            break;
-        }
+        std::vector<char> buf(256);
+        for (int i = 0; i < maxTokens; ++i) {
+            if (aborted()) {
+                LOGI("generation cancelled before sample at token %d", i);
+                result = -98;
+                fail = true;
+                break;
+            }
+            llama_token id = llama_sampler_sample(smpl, ctx, -1);
+            llama_sampler_accept(smpl, id);
 
-        int n = llama_token_to_piece(vocab, id, buf.data(), (int) buf.size(), 0, true);
-        if (n < 0) {
-            buf.resize(-n);
-            n = llama_token_to_piece(vocab, id, buf.data(), (int) buf.size(), 0, true);
-        }
-        if (n <= 0) continue;
+            if (llama_vocab_is_eog(vocab, id)) {
+                LOGI("hit EOG at token %d", i);
+                break;
+            }
 
-        piece_buf.assign(buf.data(), n);
-        emitted++;
-        if (i < 3 || i % 16 == 0) {
-            LOGI("token %d: emitted=%d piece_len=%d", i, emitted, n);
-        }
-        if (!emit(env, callback, mid, piece_buf)) {
-            LOGI("generation cancelled by caller at token %d", i);
-            break;
-        }
+            int n = llama_token_to_piece(vocab, id, buf.data(), (int) buf.size(), 0, true);
+            if (n < 0) {
+                buf.resize(-n);
+                n = llama_token_to_piece(vocab, id, buf.data(), (int) buf.size(), 0, true);
+            }
+            if (n <= 0) continue;
 
-        llama_batch next = llama_batch_get_one(&id, 1);
-        if (llama_decode(ctx, next) != 0) {
-            LOGE("decode failed at token %d", i);
-            break;
+            piece_buf.assign(buf.data(), n);
+            emitted++;
+            if (i < 3 || i % 16 == 0) {
+                LOGI("token %d: emitted=%d piece_len=%d", i, emitted, n);
+            }
+            if (!emit(env, callback, mid, piece_buf) || aborted()) {
+                LOGI("generation cancelled by caller at token %d", i);
+                result = -98;
+                fail = true;
+                break;
+            }
+
+            llama_batch next = llama_batch_get_one(&id, 1);
+            int rc = llama_decode(ctx, next);
+            if (rc == 2 || aborted()) {
+                LOGI("decode aborted at token %d rc=%d", i, rc);
+                result = -98;
+                fail = true;
+                break;
+            }
+            if (rc != 0) {
+                LOGE("decode failed at token %d rc=%d", i, rc);
+                break;
+            }
         }
+        if (!fail) result = emitted;
     }
 
     llama_sampler_free(smpl);
-    LOGI("generation done: %d tokens emitted", emitted);
-    return emitted;
+    LOGI("generation done: emitted=%d result=%d", emitted, (int) result);
+    return result;
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -297,7 +389,6 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeChat(
         JNIEnv *env, jobject /*thiz*/, jstring templateJ, jobjectArray roles,
         jobjectArray contents, jint maxTokens, jfloat temperature, jint topK,
         jfloat topP, jobject callback) {
-
     std::string tmpl = jstr(env, templateJ);
     jsize n = env->GetArrayLength(roles);
 
@@ -347,5 +438,5 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeChatTemplate(
 extern "C" JNIEXPORT jint JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeContextSize(
         JNIEnv * /*env*/, jobject /*thiz*/) {
-    return g_engine.n_ctx;
+    return g_engine.n_ctx.load();
 }

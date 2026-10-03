@@ -16,6 +16,14 @@ class LlmClient(
 ) {
     private val json = "application/json; charset=utf-8".toMediaType()
 
+    fun cancel() {
+        onDevice?.cancel()
+    }
+
+    fun clearAbort() {
+        onDevice?.clearAbort()
+    }
+
     fun chat(
         config: LlmConfig,
         messages: List<ChatMessage>,
@@ -49,6 +57,7 @@ class LlmClient(
         cancelled: () -> Boolean,
     ): ChatResult {
         val engine = onDevice ?: throw LlmException(503, "端侧推理引擎不可用")
+        if (cancelled()) throw LlmException(499, "cancelled")
         if (!engine.isLoaded()) throw LlmException(503, "端侧模型未加载，请在离线页加载模型")
         val pairs = messages
             .filter { it.role == "system" || it.role == "user" || it.role == "assistant" }
@@ -73,6 +82,9 @@ class LlmClient(
                 }
             },
         )
+        if (code == -98 || cancelled()) {
+            throw LlmException(499, "cancelled")
+        }
         if (code == -99) {
             if (sb.isNotEmpty()) {
                 return ChatResult(content = sb.toString(), raw = sb.toString(), finishReason = "timeout")
