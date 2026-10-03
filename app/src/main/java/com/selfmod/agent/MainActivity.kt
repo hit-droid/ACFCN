@@ -28,6 +28,10 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // Restore the shared browser after a process death (M12). The WebView is
+        // created later by Compose, so this only queues the state for now.
+        runCatching { (application as App).browser.restoreState(savedInstanceState) }
+
         // enableEdgeToEdge() 内部调用 Window.setDecorFitsSystemWindows() 是 API 30+，
         // Android 10(API 29) 上直接调 enableEdgeToEdge 会崩。
         // 这里用 WindowInsetsControllerCompat 做版本安全的沉浸式设置。
@@ -44,5 +48,19 @@ class MainActivity : ComponentActivity() {
                 MainScreen(vm)
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        // super must run first so the WebView's own view state is already in the
+        // bundle before the page state is added (M12).
+        super.onSaveInstanceState(outState)
+        runCatching { (application as App).browser.saveState(outState) }
+    }
+
+    override fun onDestroy() {
+        // The shared WebView outlives the tabs, so it must be released here or the
+        // activity leaks. This also wakes any agent call waiting on the page.
+        runCatching { (application as App).browser.destroy() }
+        super.onDestroy()
     }
 }
