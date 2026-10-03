@@ -29,6 +29,7 @@
 - [Qoder] `fix/ui-l4-emptychat` | `ui/` | 2026-10-03 | 当天 | PR #8 开放（L4）
 - [Qoder] `fix/ui-l5-markdown-links` | `ui/` | 2026-10-03 | 当天 | PR #9 开放（L5）
 - [opencode] `fix/llm-request-timeout` | `llm/LlmClient.kt` | 2026-10-03 | 当天 | PR #10（H3，timeoutSeconds 接入 OkHttp + cancel 掐 HTTP）
+- [opencode] `fix/session-store-toolcalls` | `store/` | 2026-10-04 | 当天 | 已完成 M8（`SessionCodec` 补 toolCalls 往返 + 截断丢孤儿 tool 消息；59/59 测试过）
 
 ---
 
@@ -36,6 +37,9 @@
 
 > 用来交接、提问、报警。格式：`[agent] 日期 — 内容`
 
+- [opencode] 2026-10-04 — M8 完成：抽出纯逻辑 `store/SessionCodec.kt`，保存/恢复 `ChatMessage.toolCalls`（含 `ToolCall`/`ToolFunction`），并在消息窗口截断后丢弃头部孤儿 `tool` 消息。新增 `SessionCodecTest` 7 例，全量 59/59 过，`assembleDebug` 通过。
+- [opencode] 2026-10-04 — v2.7 已发布（tag `v2.7` → bf7a9d7）。自 v2.6 起 15 个提交进入发行版；release APK 仍是 unsigned（仓库未配签名 secrets）。
+- [opencode] 2026-10-04 — 开工 `fix/session-store-toolcalls`（M8）。请勿改 `store/SessionStore.kt`、`store/SessionCodec.kt`。
 - [opencode] 2026-10-03 — PR #6（H8）已合 `c6e9297`；H8 崩溃报告改为原子写+fsync，filesDir 失败回退 cacheDir/externalCacheDir。
 - [opencode] 2026-10-03 — 开工 `fix/llm-request-timeout`（H3）。`timeoutSeconds` 接到 connect/read/write/callTimeout；`cancel()` 取消 in-flight OkHttp。请勿改 `llm/LlmClient.kt`。Qoder 的 `ui/` 分支与 H5 分支都不要动。
 - [opencode] 2026-10-03 — 开工 `feat/ondevice-cancel`（H1/H2）。native `abort_flag` + `llama_set_abort_callback` 可打断 prefill/decode；generate 不再整段占 `g_engine.mu`，`nativeIsReady`/`nativeChatTemplate`/`nativeFree` 可在生成期查询或等 idle 卸载。看门狗超时会 `nativeCancel` 再 join。请勿改 `cpp/` 与 `offline/`。
@@ -83,7 +87,7 @@
 - [ ] M5 `SettingsStore.llmConfig()` 在 getter 里做密钥迁移，有写盘副作用
 - [x] M6 `ConfigScreen.currentCfg()` 丢失端侧字段 → **已修复**（da5d129）
 - [ ] M7 `SecretStore` 加密失败静默降级明文；加密判断靠类名字符串
-- [ ] M8 `SessionStore` 不存 toolCalls，恢复后对话序列非法
+- [x] M8 `SessionStore` 不存 toolCalls — 已修，`fix/session-store-toolcalls`（待合）
 - [ ] M9 端侧过滤 `tool` 角色消息时静默丢弃
 - [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环
 - [x] M11 `onMainSync` 默认值 — **已修复**（PR #2, merge 43dc398）
