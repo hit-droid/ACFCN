@@ -66,7 +66,9 @@ class CrashStore(
         appendLine("time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(clock())}")
         appendLine(deviceInfo())
         appendLine()
-        appendLine(throwable.stackTraceToString())
+        // L15: exception messages can carry auth headers or provider key
+        // echoes; the report is user-shareable, so mask secrets at the source.
+        appendLine(SecretRedactor.redact(throwable.stackTraceToString()))
     }
 
     private fun writeAtomically(dir: File, body: String) {
