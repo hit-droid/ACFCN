@@ -71,16 +71,9 @@ class LlmClient(
         val engine = onDevice ?: throw LlmException(503, "端侧推理引擎不可用")
         if (cancelled()) throw LlmException(499, "cancelled")
         if (!engine.isLoaded()) throw LlmException(503, "端侧模型未加载，请在离线页加载模型")
-        val pairs = messages
-            .filter { it.role == "system" || it.role == "user" || it.role == "assistant" }
-            .map { m ->
-                val role = when (m.role) {
-                    "assistant" -> "assistant"
-                    "system" -> "system"
-                    else -> "user"
-                }
-                role to m.content
-            }
+        // M9: `tool` results are folded into marked user turns instead of being
+        // silently dropped (OnDevicePrompts keeps every message).
+        val pairs = OnDevicePrompts.fold(messages)
         val sb = StringBuilder()
         val code = engine.chat(
             messages = pairs,
