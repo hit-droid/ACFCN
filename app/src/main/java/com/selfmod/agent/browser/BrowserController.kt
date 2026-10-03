@@ -471,6 +471,9 @@ class BrowserController(
             }
         }
         if (!awaitSignal(latch, timeoutMs)) return "ERROR: js timeout"
+        // abortWaits() from destroy() releases the latch without a result, so a
+        // detached view must not be reported as the literal string "null".
+        if (webView == null && box[0] == "null") return "ERROR: browser detached"
         return box[0]
     }
 
