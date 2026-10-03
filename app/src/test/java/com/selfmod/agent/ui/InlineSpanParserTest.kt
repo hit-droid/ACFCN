@@ -1,5 +1,7 @@
 package com.selfmod.agent.ui
 
+import androidx.compose.ui.text.LinkAnnotation
+import com.selfmod.agent.ui.theme.TextPrimary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -105,5 +107,33 @@ class InlineSpanParserTest {
         val spans = InlineSpanParser.parse("[label](   )")
         assertEquals("[label](   )", visible("[label](   )"))
         assertTrue(spans.none { it.url != null })
+    }
+
+    // ---- the AnnotatedString the renderer actually hands to Text ----
+
+    @Test
+    fun linkBecomesAUrlAnnotation() {
+        val a = InlineSpanParser.parse("详见 [文档](https://example.com/d)").toAnnotated(TextPrimary)
+        assertEquals("详见 文档", a.text)
+        val links = a.getLinkAnnotations(0, a.length)
+        assertEquals(1, links.size)
+        assertEquals("https://example.com/d", (links.single().item as LinkAnnotation.Url).url)
+        // Covers the label only, so the tap target is not the whole line.
+        assertEquals(3, links.single().start)
+        assertEquals(5, links.single().end)
+    }
+
+    @Test
+    fun unsafeUrlIsRenderedAsPlainText() {
+        for (bad in listOf(
+            "javascript:alert(1)",
+            "file:///data/data/com.selfmod.agent/shared_prefs/x.xml",
+            "content://contacts/people/1",
+            "intent://scan/#Intent",
+        )) {
+            val a = InlineSpanParser.parse("[点我]($bad)").toAnnotated(TextPrimary)
+            assertEquals("$bad must not be a link", 0, a.getLinkAnnotations(0, a.length).size)
+            assertEquals("点我", a.text)
+        }
     }
 }

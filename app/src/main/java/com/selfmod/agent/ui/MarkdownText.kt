@@ -182,12 +182,12 @@ private fun InlineText(
 }
 
 /** Answer text is untrusted, so only web/mail links get an annotation at all. */
-private fun isSafeUrl(url: String): Boolean =
+internal fun isSafeUrl(url: String): Boolean =
     url.startsWith("http://", ignoreCase = true) ||
         url.startsWith("https://", ignoreCase = true) ||
         url.startsWith("mailto:", ignoreCase = true)
 
-private fun List<InlineSpan>.toAnnotated(baseColor: Color): AnnotatedString = buildAnnotatedString {
+internal fun List<InlineSpan>.toAnnotated(baseColor: Color): AnnotatedString = buildAnnotatedString {
     this@toAnnotated.forEach { span ->
         val style = when (span.kind) {
             InlineKind.Plain -> SpanStyle(color = baseColor)
