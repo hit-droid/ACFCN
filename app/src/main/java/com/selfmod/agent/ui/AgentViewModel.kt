@@ -272,9 +272,20 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun applyProfile(id: String) { app.settings.applyProfile(id) }
     fun deleteProfile(id: String) { app.settings.deleteProfile(id) }
 
-    fun localModels(): List<LocalModel> = app.models.list()
-    fun importModel(uri: Uri): LocalModel = app.models.importUri(uri)
-    fun removeModel(id: String) { app.models.remove(id) }
+    /**
+     * Registry snapshot kept as state rather than a one-shot read, so the import
+     * picker and the list on screen can never disagree (L7).
+     */
+    private val _localModels = MutableStateFlow<List<LocalModel>>(app.models.list())
+    val localModels: StateFlow<List<LocalModel>> = _localModels.asStateFlow()
+
+    fun refreshLocalModels() { _localModels.value = app.models.list() }
+
+    fun importModel(uri: Uri): LocalModel = app.models.importUri(uri).also { refreshLocalModels() }
+    fun removeModel(id: String) {
+        app.models.remove(id)
+        refreshLocalModels()
+    }
     fun applyOfflineModel(m: LocalModel) {
         val stem = m.name.substringBeforeLast('.')
         val cfg = app.settings.llmConfig().copy(

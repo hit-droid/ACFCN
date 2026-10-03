@@ -24,6 +24,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +49,10 @@ import com.selfmod.agent.ui.theme.TextSecondary
 
 @Composable
 fun OfflineScreen(vm: AgentViewModel) {
-    var models by remember { mutableStateOf(vm.localModels()) }
+    // L7: the list is derived state from the registry — it updates on import/remove
+    // and when the tab is re-composed, instead of a frozen remember() snapshot.
+    val models by vm.localModels.collectAsState()
+    LaunchedEffect(Unit) { vm.refreshLocalModels() }
     val offline by vm.offlineMode.collectAsState()
     val probe by vm.probeHits.collectAsState()
     val probing by vm.probing.collectAsState()
@@ -68,10 +72,7 @@ fun OfflineScreen(vm: AgentViewModel) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
             runCatching { vm.importModel(uri) }
-                .onSuccess { m ->
-                    models = vm.localModels()
-                    note = "已导入 ${m.name} (${m.format} · ${m.sizeLabel()})"
-                }
+                .onSuccess { m -> note = "已导入 ${m.name} (${m.format} · ${m.sizeLabel()})" }
                 .onFailure { note = "导入失败：${it.message}" }
         }
     }
@@ -269,7 +270,6 @@ fun OfflineScreen(vm: AgentViewModel) {
                         }) { Text("用作外部服务模型") }
                         OutlinedButton(onClick = {
                             vm.removeModel(m.id)
-                            models = vm.localModels()
                         }) { Text("移除") }
                     }
                 }
