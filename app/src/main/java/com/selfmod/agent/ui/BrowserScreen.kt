@@ -114,7 +114,7 @@ fun BrowserChrome(vm: AgentViewModel) {
             Modifier.fillMaxWidth().background(SurfaceVariant).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { browser.goHome() }, modifier = Modifier.size(34.dp)) {
+            IconButton(onClick = { browser.open(BrowserController.HOME) }, modifier = Modifier.size(34.dp)) {
                 Icon(Icons.Filled.Home, contentDescription = "主页", modifier = Modifier.size(18.dp))
             }
             Text(
@@ -141,7 +141,7 @@ fun BrowserChrome(vm: AgentViewModel) {
                     history.take(20).forEach { h ->
                         Row(
                             Modifier.fillMaxWidth()
-                                .clickable { browser.navigate(h); bar = h; showHistory = false }
+                                .clickable { browser.open(h); bar = h; showHistory = false }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
