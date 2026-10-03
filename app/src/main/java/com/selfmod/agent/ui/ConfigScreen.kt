@@ -64,7 +64,9 @@ fun ConfigScreen(vm: AgentViewModel) {
     val test by vm.testResult.collectAsState()
     val listing by vm.listingModels.collectAsState()
 
-    fun currentCfg(): LlmConfig = LlmConfig(
+    // 以已存配置为基底再覆盖 UI 暴露的字段，避免把端侧模型路径、上下文、
+    // 超时等未在 API 页展示的字段清空（例如点了「测试连接」把 onDeviceModelPath 抹掉）。
+    fun currentCfg(): LlmConfig = vm.config().copy(
         baseUrl = baseUrl.trim(),
         apiKey = apiKey.trim(),
         model = model.trim(),

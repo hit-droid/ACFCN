@@ -23,9 +23,15 @@ data class LlmConfig(
     fun isLocalHost(): Boolean {
         val h = host().lowercase()
         if (h.isEmpty()) return false
-        return h == "localhost" || h == "127.0.0.1" || h == "10.0.2.2" || h == "0.0.0.0" ||
-            h.startsWith("192.168.") || h.startsWith("10.") || h.startsWith("172.16.") ||
+        if (h == "localhost" || h == "0.0.0.0" || h == "10.0.2.2" ||
             h.endsWith(".local") || h.endsWith(".lan")
+        ) return true
+        // 用 isSiteLocalAddress 正确识别 10/8、172.16/12、192.168/16、127/8 等私网段，
+        // 避免字符串前缀匹配漏掉 172.17–172.31 或误匹配主机名。
+        return runCatching {
+            val addr = java.net.InetAddress.getByName(h)
+            addr.isSiteLocalAddress || addr.isLoopbackAddress || addr.isLinkLocalAddress
+        }.getOrDefault(false)
     }
 
     fun isUsable(): Boolean {
