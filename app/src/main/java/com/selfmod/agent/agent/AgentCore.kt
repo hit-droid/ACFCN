@@ -31,6 +31,9 @@ class AgentCore(
 
     private val cancelled = AtomicBoolean(false)
 
+    /** Detects the model re-issuing an identical call (H4). */
+    private val loopGuard = ToolLoopGuard()
+
     fun cancel() {
         cancelled.set(true)
         llmClient.cancel()
@@ -55,6 +58,7 @@ class AgentCore(
     ): String = withContext(Dispatchers.IO) {
         cancelled.set(false)
         llmClient.clearAbort()
+        loopGuard.reset()
         history.add(ChatMessage("user", userText))
         onStep(AgentStep.Started)
 
@@ -109,6 +113,12 @@ class AgentCore(
                 return@withContext result.content
             }
 
+            // Non-native mode: collect this turn's observations and append them as
+            // a single user message. Stacking one user message per tool result
+            // breaks the alternating role sequence (H4).
+            val observations = ArrayList<Pair<String, String>>()
+            var skippedRepeats = 0
+
             for (tc in result.toolCalls) {
                 if (cancelled.get()) {
                     onStep(AgentStep.Error("已停止"))
@@ -116,6 +126,20 @@ class AgentCore(
                 }
                 val name = tc.function.name
                 val args = tc.function.arguments
+                val hits = loopGuard.countOf(name, args)
+                if (hits >= MAX_REPEAT_CALLS) {
+                    // The model is stuck re-issuing the same call; running it again
+                    // only burns context, so feed back a warning instead (H4).
+                    val note = "重复调用检测：$name 已用完全相同的参数调用 $hits 次，已跳过执行。请不要重复同样的操作，换一种参数或直接给出答案。"
+                    onStep(AgentStep.Observation(note))
+                    skippedRepeats++
+                    if (nativeTools) {
+                        history.add(ChatMessage(role = "tool", content = note, name = name, toolCallId = tc.id))
+                    } else {
+                        observations.add(name to note)
+                    }
+                    continue
+                }
                 onStep(AgentStep.Action(name, args))
                 val out = tools.invoke(name, args)
                 val trimmed = if (out.length > 6000) out.substring(0, 6000) + "...(truncated)" else out
@@ -130,13 +154,25 @@ class AgentCore(
                         )
                     )
                 } else {
-                    history.add(
-                        ChatMessage(
-                            role = "user",
-                            content = "Observation from $name:\n$trimmed\n\nContinue. If the task is done, answer without an Action.",
-                        )
-                    )
+                    observations.add(name to trimmed)
                 }
+            }
+
+            if (!nativeTools && observations.isNotEmpty()) {
+                history.add(
+                    ChatMessage(
+                        role = "user",
+                        content = ToolLoopGuard.formatObservations(observations),
+                    )
+                )
+            }
+
+            // Nothing actually ran this turn — every call was a repeat. Without
+            // stopping we would just spin to MAX_ITERATIONS and waste the context.
+            if (skippedRepeats == result.toolCalls.size) {
+                val msg = "检测到模型陷入重复调用，已停止。请换一种问法或缩小任务。"
+                onStep(AgentStep.Error(msg))
+                return@withContext msg
             }
         }
         val msg = "已达到最大推理步数 ($MAX_ITERATIONS)，请缩小任务或换用更具体的指令。"
@@ -146,5 +182,8 @@ class AgentCore(
 
     companion object {
         private const val MAX_ITERATIONS = 12
+
+        /** A call repeated this many times (same name+args) is treated as a stuck loop (H4). */
+        private const val MAX_REPEAT_CALLS = 3
     }
 }
