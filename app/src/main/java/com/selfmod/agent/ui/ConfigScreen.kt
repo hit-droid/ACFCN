@@ -290,9 +290,13 @@ fun ConfigScreen(vm: AgentViewModel) {
 
         Spacer(Modifier.height(8.dp))
         Text("存储空间", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
-        val usage = remember(tick) { vm.storageUsage() }
-        val total = remember(tick) { vm.storageTotal() }
-        val free = remember(tick) { vm.storageFree() }
+        // storageTick bumps when an async wipe (L9) lands, so the numbers below are
+        // not the ones from before the delete.
+        val storageTick by vm.storageTick.collectAsState()
+        val storageBusy by vm.storageBusy.collectAsState()
+        val usage = remember(tick, storageTick) { vm.storageUsage() }
+        val total = remember(tick, storageTick) { vm.storageTotal() }
+        val free = remember(tick, storageTick) { vm.storageFree() }
         Column(
             Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -311,7 +315,10 @@ fun ConfigScreen(vm: AgentViewModel) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { vm.clearCache(); tick++ }) { Text("清理缓存", fontSize = 12.sp) }
-            OutlinedButton(onClick = { vm.clearModelCopies(); tick++ }) { Text("删除模型副本", fontSize = 12.sp) }
+            OutlinedButton(
+                onClick = { vm.clearModelCopies(); tick++ },
+                enabled = !storageBusy,
+            ) { Text(if (storageBusy) "删除中…" else "删除模型副本", fontSize = 12.sp) }
             OutlinedButton(onClick = { vm.clearScriptVersions(); tick++ }) { Text("清理版本", fontSize = 12.sp) }
         }
         val storageMsg by vm.storageMsg.collectAsState()
