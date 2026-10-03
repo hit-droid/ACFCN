@@ -31,7 +31,8 @@
 - [opencode] `fix/llm-request-timeout` | `llm/LlmClient.kt` | 2026-10-03 | 当天 | 已合并（PR #10, merge bf7a9d7）
 - [opencode] `fix/session-store-toolcalls` | `store/` | 2026-10-04 | 当天 | 已合并（PR #12, merge 88fa621）
 - [opencode] `fix/ondevice-tool-role` | `llm/OnDevicePrompts.kt`, `llm/LlmClient.kt`(chatOnDevice) | 2026-10-04 | 当天 | 已合并（PR #14, merge 015fc75）
-- [opencode] `fix/stream-assembler-index` | `llm/StreamAssembler.kt` | 2026-10-04 | 当天 | 开工 M3（tool_calls 无 index 时按 id 分流；name 去重）
+- [opencode] `fix/stream-assembler-index` | `llm/StreamAssembler.kt` | 2026-10-04 | 当天 | 已合并（PR #15, merge 4e4edc1）
+- [opencode] `fix/react-pairing` | `llm/ToolCallParser.kt` | 2026-10-04 | 当天 | 开工 M4（ReAct Action/Action Input 改为按文本位置配对）
 
 ---
 
@@ -39,6 +40,7 @@
 
 > 用来交接、提问、报警。格式：`[agent] 日期 — 内容`
 
+- [opencode] 2026-10-04 — PR #15（M3）已合 `4e4edc1`。开工 M4：`parseReact` 从"两组匹配按下标配对"改为按文本位置配对——每个 Action 只吃它之后、下一个 Action 之前的最近一条 Action Input，漏写 input 不再串台。请勿改 `llm/ToolCallParser.kt`。
 - [opencode] 2026-10-04 — PR #14（M9）已合 `015fc75`。开工 M3：`StreamAssembler` 无 index 的 tool_calls chunk 改为按 id 分流（新 id 开新 call，否则续写最近一个）；name 与已积累值相同则跳过，防 Ollama 式重发流把 name 重复追加。请勿改 `llm/StreamAssembler.kt`。
 - [opencode] 2026-10-04 — PR #12（M8）已合 `88fa621`。开工 M9：新增 `llm/OnDevicePrompts`，`chatOnDevice` 改用它，`tool` 结果折叠为带 `[工具结果]` 标记的 user 轮并合并同轮多条，assistant 空 content 带 toolCalls 时渲染 `[调用工具]` 摘要。请勿改 `llm/OnDevicePrompts.kt`。
 - [opencode] 2026-10-04 — M8 完成：抽出纯逻辑 `store/SessionCodec.kt`，保存/恢复 `ChatMessage.toolCalls`（含 `ToolCall`/`ToolFunction`），并在消息窗口截断后丢弃头部孤儿 `tool` 消息。新增 `SessionCodecTest` 7 例，全量 59/59 过，`assembleDebug` 通过。
@@ -86,8 +88,8 @@
 ### 中严重度
 - [ ] M1 `nativeGenerate()` 死代码（无调用者）
 - [ ] M2 采样参数不支持 seed/repeat/presence/frequency penalty；远程未发 top_p/top_k
-- [@opencode] M3 `StreamAssembler.applyJson` 的 tool_calls index 回退有缺陷；name 重复追加 — 进行中 `fix/stream-assembler-index`
-- [ ] M4 `ToolCallParser.parseReact` 按行号配对 Action/Action Input，多 Action 会错位
+- [x] M3 `StreamAssembler.applyJson` 的 tool_calls index 回退有缺陷；name 重复追加 — **已修复**（PR #15, merge 4e4edc1）
+- [@opencode] M4 `ToolCallParser.parseReact` 按行号配对 Action/Action Input，多 Action 会错位 — 进行中 `fix/react-pairing`
 - [ ] M5 `SettingsStore.llmConfig()` 在 getter 里做密钥迁移，有写盘副作用
 - [x] M6 `ConfigScreen.currentCfg()` 丢失端侧字段 → **已修复**（da5d129）
 - [ ] M7 `SecretStore` 加密失败静默降级明文；加密判断靠类名字符串

@@ -34,6 +34,66 @@ class ToolCallParserTest {
     }
 
     @Test
+    fun pairsMultipleActionsInOrder() {
+        val text = """
+            Thought: go
+            Action: browser_open
+            Action Input: {"url":"https://a.com"}
+            Thought: then type
+            Action: browser_type
+            Action Input: {"text":"hi"}
+        """.trimIndent()
+        val calls = ToolCallParser.parse(text)
+        assertEquals(2, calls.size)
+        assertEquals("browser_open", calls[0].function.name)
+        assertTrue(calls[0].function.arguments.contains("a.com"))
+        assertEquals("browser_type", calls[1].function.name)
+        assertTrue(calls[1].function.arguments.contains("hi"))
+    }
+
+    @Test
+    fun missingInputDoesNotStealNextActionsInput() {
+        val text = """
+            Thought: hmm
+            Action: browser_open
+            Thought: need the url first, no input yet
+            Action: browser_type
+            Action Input: {"text":"hi"}
+        """.trimIndent()
+        val calls = ToolCallParser.parse(text)
+        assertEquals(2, calls.size)
+        assertEquals("{}", calls[0].function.arguments)
+        assertTrue("第二条应拿到自己的输入", calls[1].function.arguments.contains("hi"))
+    }
+
+    @Test
+    fun strayInputBeforeFirstActionIsIgnored() {
+        val text = """
+            Action Input: {"stray":true}
+            Action: browser_open
+            Action Input: {"url":"https://a.com"}
+        """.trimIndent()
+        val calls = ToolCallParser.parse(text)
+        assertEquals(1, calls.size)
+        assertTrue("应配对 Action 之后的输入", calls[0].function.arguments.contains("a.com"))
+        assertTrue(!calls[0].function.arguments.contains("stray"))
+    }
+
+    @Test
+    fun inputBelongingToEarlierActionIsNotReusedByLaterOne() {
+        val text = """
+            Action: browser_open
+            Action Input: {"url":"https://a.com"}
+            Thought: now again without input
+            Action: browser_snapshot
+        """.trimIndent()
+        val calls = ToolCallParser.parse(text)
+        assertEquals(2, calls.size)
+        assertTrue(calls[0].function.arguments.contains("a.com"))
+        assertEquals("{}", calls[1].function.arguments)
+    }
+
+    @Test
     fun parsesBareJson() {
         val calls = ToolCallParser.parse("""{"name":"list_scripts","arguments":{}}""")
         assertEquals("list_scripts", calls[0].function.name)
