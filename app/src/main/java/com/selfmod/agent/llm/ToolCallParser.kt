@@ -64,18 +64,26 @@ object ToolCallParser {
         )
     }
 
+    /**
+     * Pairs each `Action` with the first `Action Input` that appears after it
+     * and before the next `Action` (M4). Positional zip of two independent
+     * match lists used to cross-wire inputs whenever a model forgot an input
+     * or interleaved several actions.
+     */
     private fun parseReact(text: String): List<ToolCall> {
-        val actions = actionLine.findAll(text).toList()
+        data class Hit(val start: Int, val value: String)
+        val actions = actionLine.findAll(text).map { Hit(it.range.first, it.groupValues[1]) }.toList()
         if (actions.isEmpty()) return emptyList()
-        val inputs = actionInputLine.findAll(text).toList()
+        val inputs = actionInputLine.findAll(text)
+            .map { Hit(it.range.first, it.groupValues[1].trim()) }
+            .toList()
         val out = ArrayList<ToolCall>()
-        actions.forEachIndexed { i, m ->
-            val name = sanitizeName(m.groupValues[1])
-            val argsRaw = inputs.getOrNull(i)?.groupValues?.get(1)?.trim().orEmpty()
-            val args = normalizeArgs(argsRaw)
+        actions.forEachIndexed { i, a ->
+            val nextAction = if (i + 1 < actions.size) actions[i + 1].start else Int.MAX_VALUE
+            val input = inputs.firstOrNull { it.start > a.start && it.start < nextAction }?.value.orEmpty()
             out += ToolCall(
                 id = "react_$i",
-                function = ToolFunction(name = name, arguments = args),
+                function = ToolFunction(name = sanitizeName(a.value), arguments = normalizeArgs(input)),
             )
         }
         return out
