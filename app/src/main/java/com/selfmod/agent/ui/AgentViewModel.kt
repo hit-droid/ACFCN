@@ -119,6 +119,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stop() {
         agent.cancel()
+        // Release any browser action still blocked waiting for a page, so the
+        // run's IO thread returns immediately instead of burning its timeout.
+        app.browser.abortWaits()
         runJob?.cancel()
         runJob = null
         _busy.value = false
@@ -265,13 +268,14 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun navigateBrowser(url: String) {
-        viewModelScope.launch(Dispatchers.IO) { app.browser.navigate(url) }
+        // Non-blocking: the UI must never wait on a page load (H6).
+        app.browser.open(url)
     }
 
     /** Opens a URL in the shared in-app browser (used by model download pages). */
     fun openInBrowser(url: String) {
         _requestedTab.value = 1
-        viewModelScope.launch(Dispatchers.IO) { app.browser.navigate(url) }
+        app.browser.open(url)
     }
 
     private val _requestedTab = MutableStateFlow(-1)

@@ -19,7 +19,8 @@
 > 开工时加一行，收工后改成"已完成"或删除。
 
 - [opencode] `main`(已推 da5d129) | `llm/`, `agent/`, `util/` | 2026-10-02 | — | 已完成：M6/L8/L6 修复
-- [opencode] `feat/ondevice-cancel` | `cpp/`, `offline/`, `llm/`, `agent/` | 2026-10-03 | 当天 | 本地完成（31/31 + assembleDebug），待 commit/PR
+- [opencode] `feat/ondevice-cancel` | `cpp/`, `offline/`, `llm/`, `agent/` | 2026-10-03 | 当天 | 已合并（PR #1, merge c9b47f4）
+- [Qoder] `fix/browser-h6-h7-index` | `browser/`, `ui/`(仅 AgentViewModel/BrowserScreen) | 2026-10-03 | 当天 | PR 待合并：**未碰 `cpp/` 与 `offline/`**
 
 ---
 
@@ -29,6 +30,7 @@
 
 - [opencode] 2026-10-03 — 开工 `feat/ondevice-cancel`（H1/H2）。native `abort_flag` + `llama_set_abort_callback` 可打断 prefill/decode；generate 不再整段占 `g_engine.mu`，`nativeIsReady`/`nativeChatTemplate`/`nativeFree` 可在生成期查询或等 idle 卸载。看门狗超时会 `nativeCancel` 再 join。请勿改 `cpp/` 与 `offline/`。
 - [opencode] 2026-10-02 — 已接替 ACFCN。本板机制由 opencode 建立。Qoder/workbuddy 接入后请在第 1 节登记，并在第 4 节认领任务。工作区安排已定：**方案 A（各自独立目录）**。
+- [Qoder] 2026-10-03 — 开工浏览器线（H6/H7/M11）。`navigate()` 改为可中断等待并新增非阻塞 `open()`；`click/type` 不再重建 snapshot，改由 `SnapshotGuard` 用页码 epoch + 元素指纹拒绝漂移索引；`onMainSync` 加 default 消除 `null as T`。**只动 `browser/` 与 `ui/` 两个文件**，未碰 `cpp/`、`offline/`。注意：本文件的第 1 节与留言区大概率与 `feat/ondevice-cancel` 冲突，合并时两边行都保留即可。
 
 ---
 
@@ -64,10 +66,10 @@
       （`agent/AgentCore.kt:90-138`, `MAX_ITERATIONS=12`）
 - [ ] H5 端侧上下文溢出无截断：多轮必然超 `n_ctx`，报含糊 `code=-3`
       （`cpp/acfcn_llm.cpp:196-244`, `llm/LlmClient.kt:53-62`）
-- [ ] H6 浏览器 `navigate()` 在 IO 线程 `Thread.sleep`+25s latch，阻塞且不可取消
-      （`browser/BrowserController.kt:157-174`）
-- [ ] H7 浏览器 `click/type` 每次重建 snapshot，DOM 索引漂移点到错元素
-      （`browser/BrowserController.kt:239-272`）
+- [@Qoder] H6 浏览器 `navigate()` 在 IO 线程 `Thread.sleep`+25s latch，阻塞且不可取消
+      （`browser/BrowserController.kt`）— 分支 `fix/browser-h6-h7-index`
+- [@Qoder] H7 浏览器 `click/type` 每次重建 snapshot，DOM 索引漂移点到错元素
+      （`browser/BrowserController.kt`, `browser/SnapshotGuard.kt`）— 分支 `fix/browser-h6-h7-index`
 - [ ] H8 崩溃存档在磁盘不可用时静默丢失
       （`util/CrashStore.kt:14-27`）
 
@@ -82,7 +84,7 @@
 - [ ] M8 `SessionStore` 不存 toolCalls，恢复后对话序列非法
 - [ ] M9 端侧过滤 `tool` 角色消息时静默丢弃
 - [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环
-- [ ] M11 `BrowserController.onMainSync` 超时返回 `null as T` 可能 NPE
+- [@Qoder] M11 `BrowserController.onMainSync` 超时返回 `null as T` 可能 NPE — 分支 `fix/browser-h6-h7-index`
 - [ ] M12 WebView 无 saveState/restoreState/destroy，进程被杀丢页
 - [ ] M13 `LocalLlmEngine.load/unload` 无同步，并发加载泄漏 GlobalRef
 - [ ] M14 CrashHandler 无法捕获 native SIGSEGV
