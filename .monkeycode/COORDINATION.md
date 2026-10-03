@@ -72,25 +72,25 @@
 - [x] M12 WebView saveState/restoreState/destroy — **已修复**（PR #3, merge 5e31008）
 - [x] M13 `LocalLlmEngine.load/unload` 无同步 — **已修复**（PR #24, merge 87f07a6；native 部分已被 H1/H2 覆盖，本次修 Kotlin 层）
 - [ ] M14 CrashHandler 无法捕获 native SIGSEGV
-- [ ] M15 测试覆盖不足：AgentCore/LocalLlmEngine 零测试
+- [@Qoder] M15 测试覆盖不足 — `AgentCore` 已补 20 例（分支 `fix/agent-m15-agentcore-tests`，PR 待建）；`LocalLlmEngine` 的 Kotlin 层已由 opencode #24 覆盖，余下部分留给 opencode
 
 ### 低严重度
 - [x] L1 端侧 maxTokens 默认 2048 过大 — **已修复**（PR #21, 默认 512）
-- [ ] L2 `ToolRegistry.coerceArgs` 对纯文本参数"撒网式"填充
-- [ ] L3 `Tools.browserType/browserOpen/browserSnapshot` 返回格式不统一 — [@Qoder] PR #11 待 rebase
-- [ ] L4 `AgentScreen.EmptyChat` 示例不可点击 — [@Qoder] PR #8 待 rebase
-- [ ] L5 `MarkdownText` 不支持链接 — [@Qoder] PR #9 待 rebase
+- [@Qoder] L2 `ToolRegistry.coerceArgs` 对纯文本参数"撒网式"填充 — PR #28 `fix/agent-l2-coerce-args`
+- [ ] L3 `Tools.browserType/browserOpen/browserSnapshot` 返回格式不统一 — [@Qoder] PR #11 已 rebase 到 `bb44dc7`（CI 会重跑）
+- [ ] L4 `AgentScreen.EmptyChat` 示例不可点击 — [@Qoder] PR #8 已 rebase 到 `bb44dc7`（CI 会重跑）
+- [ ] L5 `MarkdownText` 不支持链接 — [@Qoder] PR #9 已 rebase 到 `bb44dc7`（CI 会重跑）
 - [x] L6 `Diagnostics` 用非线程安全 SimpleDateFormat → **已修复**（da5d129）
-- [ ] L7 `OfflineScreen` 模型列表用 remember 快照 — [@Qoder] PR #7 待 rebase
+- [ ] L7 `OfflineScreen` 模型列表用 remember 快照 — [@Qoder] PR #7 已 rebase 到 `bb44dc7`（CI 会重跑）
 - [x] L8 `isLocalHost()` 漏判 172.17–172.31 私网段 → **已修复**（da5d129）
-- [ ] L9 `StorageStats.clearModelCopies` 未与引擎状态联动 — [@Qoder] PR #13 待 rebase
+- [ ] L9 `StorageStats.clearModelCopies` 未与引擎状态联动 — [@Qoder] PR #13 已 rebase 到 `bb44dc7`（CI 会重跑）
 - [ ] L10 插件安装无签名/完整性校验
-- [ ] L11 `ScriptEngine` 无执行超时 — [@Qoder] PR #23 待 rebase
+- [ ] L11 `ScriptEngine` 无执行超时 — [@Qoder] PR #23 已 rebase 到 `bb44dc7`（CI 会重跑）
 - [x] L12 native 循环每次 `GetMethodID` — **已过时**（复核：`generate_impl` 每次*调用*只解析一次 methodID，H1/H2 重构已覆盖；每 token 仅必要的 NewStringUTF）
 - [ ] L13 `localPathFor` 与 `materialize` 路径语义不一致
 - [x] L14 `chatOllama` 忽略 tools — **已修复**（PR #25, merge 43fd080）
 - [x] L15 崩溃报告可能含 Key/header — **已修复**（PR #17, merge f1d9a09）
-- [ ] L16 `App.uiEvents` 缓冲溢出静默丢弃 — [@Qoder] PR #20 待 rebase
+- [ ] L16 `App.uiEvents` 缓冲溢出静默丢弃 — [@Qoder] PR #20 已 rebase 到 `bb44dc7`（CI 会重跑）
 
 ---
 
