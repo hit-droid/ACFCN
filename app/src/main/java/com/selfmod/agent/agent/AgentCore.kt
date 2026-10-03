@@ -33,6 +33,7 @@ class AgentCore(
 
     fun cancel() {
         cancelled.set(true)
+        llmClient.cancel()
     }
 
     fun systemPrompt(): String {
@@ -53,6 +54,7 @@ class AgentCore(
         onStep: (AgentStep) -> Unit,
     ): String = withContext(Dispatchers.IO) {
         cancelled.set(false)
+        llmClient.clearAbort()
         history.add(ChatMessage("user", userText))
         onStep(AgentStep.Started)
 

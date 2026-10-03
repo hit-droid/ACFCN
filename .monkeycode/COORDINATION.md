@@ -19,7 +19,7 @@
 > 开工时加一行，收工后改成"已完成"或删除。
 
 - [opencode] `main`(已推 da5d129) | `llm/`, `agent/`, `util/` | 2026-10-02 | — | 已完成：M6/L8/L6 修复
-- [opencode] 下一步计划 `feat/ondevice-cancel` | `cpp/`, `offline/` | 待人类确认 | — | 计划中
+- [opencode] `feat/ondevice-cancel` | `cpp/`, `offline/`, `llm/`, `agent/` | 2026-10-03 | 当天 | 本地完成（31/31 + assembleDebug），待 commit/PR
 
 ---
 
@@ -27,6 +27,7 @@
 
 > 用来交接、提问、报警。格式：`[agent] 日期 — 内容`
 
+- [opencode] 2026-10-03 — 开工 `feat/ondevice-cancel`（H1/H2）。native `abort_flag` + `llama_set_abort_callback` 可打断 prefill/decode；generate 不再整段占 `g_engine.mu`，`nativeIsReady`/`nativeChatTemplate`/`nativeFree` 可在生成期查询或等 idle 卸载。看门狗超时会 `nativeCancel` 再 join。请勿改 `cpp/` 与 `offline/`。
 - [opencode] 2026-10-02 — 已接替 ACFCN。本板机制由 opencode 建立。Qoder/workbuddy 接入后请在第 1 节登记，并在第 4 节认领任务。工作区安排已定：**方案 A（各自独立目录）**。
 
 ---
@@ -53,10 +54,10 @@
 > 认领时把 `[ ]` 改成 `[@你的名字]`，并在第 1 节登记。
 
 ### 高严重度
-- [ ] H1 端侧取消：看门狗只置标志，无法真正中断 native 生成，卸载可能阻塞/ANR
-      （`offline/native/LocalLlmEngine.kt:132-161`, `cpp/acfcn_llm.cpp:179/271`）
-- [ ] H2 端侧全局锁：init/generate/free 争用一把 `g_engine.mu`，生成时无法查询/卸载
-      （`cpp/acfcn_llm.cpp:34/88/161/179/341`）
+- [@opencode] H1 端侧取消：看门狗只置标志，无法真正中断 native 生成，卸载可能阻塞/ANR
+      （`offline/native/LocalLlmEngine.kt`, `cpp/acfcn_llm.cpp`）— 进行中 `feat/ondevice-cancel`
+- [@opencode] H2 端侧全局锁：init/generate/free 争用一把 `g_engine.mu`，生成时无法查询/卸载
+      （`cpp/acfcn_llm.cpp`）— 进行中 `feat/ondevice-cancel`
 - [ ] H3 `config.timeoutSeconds` 未接入实际请求超时；取消依赖 OkHttp 阻塞返回
       （`llm/LlmClient.kt:361-366/109-125`）
 - [ ] H4 非原生工具历史：同轮多工具结果连续塞多条 user 消息；无重复调用检测
@@ -122,7 +123,7 @@ echo "sdk.dir=/opt/android-sdk" > local.properties
 ```
 
 - 首次完整构建 ~9 分钟，增量 ~2 分钟。
-- 提交前基线：`testDebugUnitTest` 28/28 通过，`assembleDebug` 产出 ~34MB APK。
+- 提交前基线：`testDebugUnitTest` 31/31 通过（含 IdleWatchdog 3），`assembleDebug` 产出 ~45MB APK。
 
 ---
 
