@@ -28,8 +28,9 @@
 - [Qoder] `fix/ui-l7-model-list` | `ui/` | 2026-10-03 | 当天 | PR #7 开放（L7）。**请勿改 `ui/`**
 - [Qoder] `fix/ui-l4-emptychat` | `ui/` | 2026-10-03 | 当天 | PR #8 开放（L4）
 - [Qoder] `fix/ui-l5-markdown-links` | `ui/` | 2026-10-03 | 当天 | PR #9 开放（L5）
-- [opencode] `fix/llm-request-timeout` | `llm/LlmClient.kt` | 2026-10-03 | 当天 | PR #10（H3，timeoutSeconds 接入 OkHttp + cancel 掐 HTTP）
-- [opencode] `fix/session-store-toolcalls` | `store/` | 2026-10-04 | 当天 | 已完成 M8（`SessionCodec` 补 toolCalls 往返 + 截断丢孤儿 tool 消息；59/59 测试过）
+- [opencode] `fix/llm-request-timeout` | `llm/LlmClient.kt` | 2026-10-03 | 当天 | 已合并（PR #10, merge bf7a9d7）
+- [opencode] `fix/session-store-toolcalls` | `store/` | 2026-10-04 | 当天 | 已合并（PR #12, merge 88fa621）
+- [opencode] `fix/ondevice-tool-role` | `llm/OnDevicePrompts.kt`, `llm/LlmClient.kt`(chatOnDevice) | 2026-10-04 | 当天 | 开工 M9（端侧不再静默丢 `tool` 消息）
 
 ---
 
@@ -37,6 +38,7 @@
 
 > 用来交接、提问、报警。格式：`[agent] 日期 — 内容`
 
+- [opencode] 2026-10-04 — PR #12（M8）已合 `88fa621`。开工 M9：新增 `llm/OnDevicePrompts`，`chatOnDevice` 改用它，`tool` 结果折叠为带 `[工具结果]` 标记的 user 轮并合并同轮多条，assistant 空 content 带 toolCalls 时渲染 `[调用工具]` 摘要。请勿改 `llm/OnDevicePrompts.kt`。
 - [opencode] 2026-10-04 — M8 完成：抽出纯逻辑 `store/SessionCodec.kt`，保存/恢复 `ChatMessage.toolCalls`（含 `ToolCall`/`ToolFunction`），并在消息窗口截断后丢弃头部孤儿 `tool` 消息。新增 `SessionCodecTest` 7 例，全量 59/59 过，`assembleDebug` 通过。
 - [opencode] 2026-10-04 — v2.7 已发布（tag `v2.7` → bf7a9d7）。自 v2.6 起 15 个提交进入发行版；release APK 仍是 unsigned（仓库未配签名 secrets）。
 - [opencode] 2026-10-04 — 开工 `fix/session-store-toolcalls`（M8）。请勿改 `store/SessionStore.kt`、`store/SessionCodec.kt`。
@@ -72,7 +74,7 @@
 ### 高严重度
 - [x] H1 端侧取消 — **已修复**（PR #1, merge c9b47f4）
 - [x] H2 端侧全局锁 — **已修复**（PR #1, merge c9b47f4）
-- [@opencode] H3 `config.timeoutSeconds` 未接入实际请求超时 — PR #10 开放 `fix/llm-request-timeout`
+- [x] H3 `config.timeoutSeconds` 未接入实际请求超时 — **已修复**（PR #10, merge bf7a9d7）
 - [x] H4 非原生工具历史 — **已修复**（PR #5, merge 1ba2974）
 - [@opencode] H5 端侧上下文溢出无截断 — PR #4 开放 `feat/ondevice-ctx-truncate`（勿改）
 - [x] H6 浏览器 `navigate()` 可中断 — **已修复**（PR #2, merge 43dc398）
@@ -87,8 +89,8 @@
 - [ ] M5 `SettingsStore.llmConfig()` 在 getter 里做密钥迁移，有写盘副作用
 - [x] M6 `ConfigScreen.currentCfg()` 丢失端侧字段 → **已修复**（da5d129）
 - [ ] M7 `SecretStore` 加密失败静默降级明文；加密判断靠类名字符串
-- [x] M8 `SessionStore` 不存 toolCalls — 已修，`fix/session-store-toolcalls`（待合）
-- [ ] M9 端侧过滤 `tool` 角色消息时静默丢弃
+- [x] M8 `SessionStore` 不存 toolCalls — **已修复**（PR #12, merge 88fa621）
+- [@opencode] M9 端侧过滤 `tool` 角色消息时静默丢弃 — 进行中 `fix/ondevice-tool-role`
 - [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环
 - [x] M11 `onMainSync` 默认值 — **已修复**（PR #2, merge 43dc398）
 - [x] M12 WebView saveState/restoreState/destroy — **已修复**（PR #3, merge 5e31008）
@@ -131,7 +133,7 @@ echo "sdk.dir=/opt/android-sdk" > local.properties
 ```
 
 - 首次完整构建 ~9 分钟，增量 ~2 分钟。
-- 提交前基线：`testDebugUnitTest` 49/49 通过（含 CrashStore 6、IdleWatchdog 3、ToolLoopGuard 6、SnapshotGuard 6），`assembleDebug` 产出 ~45MB APK。
+- 提交前基线：`testDebugUnitTest` 66/66 通过（含 SessionCodec 7、OnDevicePrompts 7、CrashStore 6、IdleWatchdog 3、ToolLoopGuard 6、SnapshotGuard 6），`assembleDebug` 产出 ~45MB APK。
 
 ---
 
