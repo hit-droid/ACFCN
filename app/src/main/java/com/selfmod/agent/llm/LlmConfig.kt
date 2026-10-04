@@ -10,7 +10,9 @@ data class LlmConfig(
     val apiKey: String = "",
     val model: String = "glm-4-plus",
     val temperature: Double = 0.6,
-    val maxTokens: Int = 2048,
+    // L1: 2048 at on-device speeds (5-15 tok/s) means minutes of generation
+    // per answer; 512 keeps replies snappy. Users can raise it in config.
+    val maxTokens: Int = 512,
     val timeoutSeconds: Long = 120,
     val kind: String = KIND_CLOUD,
     val profileName: String = "",

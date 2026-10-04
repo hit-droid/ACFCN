@@ -71,7 +71,7 @@ fun ConfigScreen(vm: AgentViewModel) {
         apiKey = apiKey.trim(),
         model = model.trim(),
         temperature = tempStr.trim().toDoubleOrNull() ?: 0.6,
-        maxTokens = maxTokStr.trim().toIntOrNull() ?: 2048,
+        maxTokens = maxTokStr.trim().toIntOrNull() ?: 512,
         kind = kind,
         profileName = profileName.trim(),
         supportsNativeTools = nativeTools,
