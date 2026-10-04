@@ -34,13 +34,17 @@
 - [opencode] `fix/stream-assembler-index` | `llm/StreamAssembler.kt` | 2026-10-04 | 当天 | 已合并（PR #15, merge 4e4edc1）
 - [opencode] `fix/react-pairing` | `llm/ToolCallParser.kt` | 2026-10-04 | 当天 | 已合并（PR #16, merge 156f743）
 - [opencode] `fix/crash-report-redaction` | `util/SecretRedactor.kt`, `util/CrashStore.kt`(buildReport) | 2026-10-04 | 当天 | 已合并（PR #17, merge f1d9a09）
-- [opencode] `fix/version-alignment` | `app/build.gradle.kts`(versionCode/versionName) | 2026-10-04 | 当天 | 对齐 versionCode=3 / versionName=2.8，随后打 tag v2.8 发版
+- [opencode] `fix/version-alignment` | `app/build.gradle.kts`(versionCode/versionName) | 2026-10-04 | 当天 | 已合并（PR #18, merge 91c7926）
+- [opencode] `docs/ci-billing-notice` | `.monkeycode/COORDINATION.md` | 2026-10-04 | 当天 | 仅本板通知：Actions 计费中断，v2.8 暂缓
 
 ---
 
 ## 2. 留言区（Message Board，最新在上）
 
 > 用来交接、提问、报警。格式：`[agent] 日期 — 内容`
+
+- [opencode] 2026-10-04 — **报警：GitHub Actions 全面中断**（PR #18 两次失败+重跑均秒挂，失败注解为 "recent account payments have failed or your spending limit needs to be increased"，需账户持有人到 Billing & plans 处理）。job 从未启动，无日志无产物。影响：所有 PR 拿不到绿勾；**v2.8 发版暂缓**（release 也跑在 Actions 上）。过渡规则：代码类 PR 合并前须在本地全量验证（testDebugUnitTest + assembleDebug + assembleRelease），并在 PR 描述注明"CI 因计费中断未跑"。
+- [opencode] 2026-10-04 — PR #18（版本对齐）已合 `91c7926`：versionCode=3 / versionName="2.8"。**v2.8 tag 等 Actions 恢复后再打**。
 
 - [opencode] 2026-10-04 — PR #17（L15）已合 `f1d9a09`。版本对齐：`versionCode=3`、`versionName="2.8"`（原 2/"1.1" 与 tag v2.7 完全脱节，同 versionCode 无法覆盖升级）。合并后打 tag `v2.8` 触发发版。
 - [opencode] 2026-10-04 — PR #16（M4）已合 `156f743`。开工 L15：新增 `util/SecretRedactor`，`CrashStore.buildReport` 写盘前对堆栈脱敏（Authorization 头、api key 对、Bearer、sk-/gsk_/ghp_/glpat-/AIza 等前缀令牌），报告可安全分享。请勿改 `util/SecretRedactor.kt`。
@@ -121,7 +125,7 @@
 - [ ] L12 native 循环每次 `GetMethodID`，可缓存
 - [ ] L13 `localPathFor` 与 `materialize` 路径语义不一致
 - [ ] L14 `chatOllama` 忽略 tools，与预设 `supportsNativeTools=true` 矛盾
-- [@opencode] L15 崩溃报告可能含 Key/header，分享有泄漏风险 — 进行中 `fix/crash-report-redaction`
+- [x] L15 崩溃报告可能含 Key/header，分享有泄漏风险 — **已修复**（PR #17, merge f1d9a09）
 - [ ] L16 `App.uiEvents` 缓冲溢出静默丢弃
 
 ---
