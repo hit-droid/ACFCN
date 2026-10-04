@@ -58,7 +58,7 @@
 - [ ] H10 端侧推理 tokens/s 本体（线程策略、KV 复用、批量 prefill）— 需真机 profile 后再动
 
 ### 中严重度
-- [ ] M1 `nativeGenerate()` 死代码（无调用者）
+- [x] M1 `nativeGenerate()` 死代码 — **已删除**（`chore/remove-native-generate`；Kotlin `generate()` 无调用者，连同 JNI export 一并移除）
 - [ ] M2 采样参数不支持 seed/repeat/presence/frequency penalty；远程未发 top_p/top_k（需 ui/ 配字段，找 Qoder 对齐）
 - [x] M3 `StreamAssembler.applyJson` tool_calls index 回退缺陷；name 重复追加 — **已修复**（PR #15, merge 4e4edc1）
 - [x] M4 `ToolCallParser.parseReact` 按行号配对错位 — **已修复**（PR #16, merge 156f743）
@@ -86,7 +86,7 @@
 - [ ] L9 `StorageStats.clearModelCopies` 未与引擎状态联动 — [@Qoder] PR #13 待 rebase
 - [ ] L10 插件安装无签名/完整性校验
 - [ ] L11 `ScriptEngine` 无执行超时 — [@Qoder] PR #23 待 rebase
-- [ ] L12 native 循环每次 `GetMethodID`，可缓存
+- [x] L12 native 循环每次 `GetMethodID` — **已过时**（复核：`generate_impl` 每次*调用*只解析一次 methodID，H1/H2 重构已覆盖；每 token 仅必要的 NewStringUTF）
 - [ ] L13 `localPathFor` 与 `materialize` 路径语义不一致
 - [x] L14 `chatOllama` 忽略 tools — **已修复**（PR #25, merge 43fd080）
 - [x] L15 崩溃报告可能含 Key/header — **已修复**（PR #17, merge f1d9a09）

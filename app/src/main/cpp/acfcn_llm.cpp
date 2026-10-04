@@ -378,13 +378,6 @@ static jint generate_impl(
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeGenerate(
-        JNIEnv *env, jobject /*thiz*/, jstring prompt, jint maxTokens,
-        jfloat temperature, jint topK, jfloat topP, jobject callback) {
-    return generate_impl(env, callback, jstr(env, prompt), maxTokens, temperature, topK, topP);
-}
-
-extern "C" JNIEXPORT jint JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeChat(
         JNIEnv *env, jobject /*thiz*/, jstring templateJ, jobjectArray roles,
         jobjectArray contents, jint maxTokens, jfloat temperature, jint topK,
