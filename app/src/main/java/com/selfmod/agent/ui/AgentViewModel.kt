@@ -62,6 +62,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private val _keysEncrypted = MutableStateFlow(app.settings.keysEncrypted)
     val keysEncrypted: StateFlow<Boolean> = _keysEncrypted.asStateFlow()
 
+    private val _keysInitIssue = MutableStateFlow(app.settings.keysInitIssue)
+    val keysInitIssue: StateFlow<String?> = _keysInitIssue.asStateFlow()
+
     private val _toast = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val toast = _toast.asSharedFlow()
 

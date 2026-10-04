@@ -15,6 +15,8 @@ class SettingsStore(context: Context) {
 
     val keysEncrypted: Boolean get() = secrets.encrypted
 
+    val keysInitIssue: String? get() = secrets.initIssue
+
     fun llmConfig(): LlmConfig {
         val raw = prefs.getString(KEY_LLM, null) ?: return LlmConfig.DEFAULT
         val cfg = decodeConfig(raw) ?: LlmConfig.DEFAULT

@@ -194,8 +194,12 @@ fun ConfigScreen(vm: AgentViewModel) {
         }
         if (saved) Text("已保存", color = AccentGreen, fontSize = 13.sp)
         val enc by vm.keysEncrypted.collectAsState()
+        val issue by vm.keysInitIssue.collectAsState()
         Text(
-            if (enc) "API Key 使用系统密钥库加密存储。" else "警告：本机不支持加密存储，Key 以明文保存。",
+            if (enc) "API Key 使用系统密钥库加密存储。" else buildString {
+                append("警告：本机不支持加密存储，Key 以明文保存。")
+                if (!issue.isNullOrBlank()) append("\n原因: ").append(issue)
+            },
             color = if (enc) TextSecondary else Danger,
             fontSize = 12.sp,
         )
