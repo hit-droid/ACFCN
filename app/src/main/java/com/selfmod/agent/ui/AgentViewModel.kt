@@ -221,7 +221,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun ingestUiEvent(e: UiEvent) {
         // L16: events emitted while no screen was collecting arrive late; the queue also
         // counts what it had to drop, so say so instead of pretending nothing happened.
-        val lost = app.uiQueue.acknowledgeDropped()
+        val lost = app.uiQueue?.acknowledgeDropped() ?: 0
         push(TraceEntry(System.currentTimeMillis(), "ui", "UI事件: ${e.action}", e.payload))
         if (lost > 0) {
             push(

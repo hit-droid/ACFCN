@@ -16,9 +16,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // If the previous run crashed, surface the report instead of pretending
-        // everything is fine.
-        val crashStore = (application as App).crashStore
-        if (crashStore.read() != null) {
+        // everything is fine. crashStore is constructed before everything else
+        // and never throws in practice.
+        val app = application as App
+        if (app.crashStore.read() != null) {
             startActivity(
                 Intent(this, CrashActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -30,7 +31,7 @@ class MainActivity : ComponentActivity() {
 
         // Restore the shared browser after a process death (M12). The WebView is
         // created later by Compose, so this only queues the state for now.
-        runCatching { (application as App).browser.restoreState(savedInstanceState) }
+        runCatching { app.browser.restoreState(savedInstanceState) }
 
         // enableEdgeToEdge() 内部调用 Window.setDecorFitsSystemWindows() 是 API 30+，
         // Android 10(API 29) 上直接调 enableEdgeToEdge 会崩。
