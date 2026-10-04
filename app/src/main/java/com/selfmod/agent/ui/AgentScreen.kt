@@ -93,7 +93,7 @@ fun AgentScreen(vm: AgentViewModel) {
         ChatTopBar(endpointHint, busy, onClear = { vm.reset() }, onRetry = { vm.retryLast() })
 
         if (trace.isEmpty()) {
-            EmptyChat()
+            EmptyChat(enabled = !busy, onPick = { vm.sendPrompt(it) })
         } else {
             LazyColumn(
                 state = listState,
@@ -155,7 +155,7 @@ private fun ChatTopBar(hint: String, busy: Boolean, onClear: () -> Unit, onRetry
 }
 
 @Composable
-private fun EmptyChat() {
+private fun EmptyChat(enabled: Boolean, onPick: (String) -> Unit) {
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -169,28 +169,32 @@ private fun EmptyChat() {
         }
         Text("我能做什么？", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         Text(
-            "让我改脚本、装插件、操作内置浏览器，或离线跑本机模型。\n试试下面的例子：",
+            "让我改脚本、装插件、操作内置浏览器，或离线跑本机模型。\n点下面的例子直接开始：",
             color = TextSecondary,
             fontSize = 13.sp,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
-        listOf(
-            "打开 example.com 并读出标题",
-            "写一个 hello.js，打印斐波那契前 10 项",
-            "帮我看看当前页面有哪些可点的元素",
-        ).forEach { s ->
+        SAMPLE_PROMPTS.forEach { s ->
             Text(
                 s,
                 color = AccentBlue,
                 fontSize = 13.sp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SurfaceVariant, RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SurfaceVariant)
+                    .clickable(enabled = enabled) { onPick(s) }
                     .padding(12.dp),
             )
         }
     }
 }
+
+private val SAMPLE_PROMPTS = listOf(
+    "打开 example.com 并读出标题",
+    "写一个 hello.js，打印斐波那契前 10 项",
+    "帮我看看当前页面有哪些可点的元素",
+)
 
 
 @Composable
