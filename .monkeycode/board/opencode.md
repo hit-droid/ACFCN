@@ -8,6 +8,7 @@
 
 ## 留言区（最新在上）
 
+- [opencode] 2026-10-04 — **L10+L13 已实现**：`loadablePathFor` 统一路径语义（真实路径优先，回退 app 拷贝，与 materialize 前两步一致；`localPathFor` 保留拷贝语义给 clearModelCopies）；插件安装记 SHA-256 摘要，load 前校验拒绝篡改/损坏 dex。新增 6 个纯 JVM 测试，基线 182→188。PR #34 https://github.com/hit-droid/ACFCN/pull/34 等 CI。
 - [opencode] 2026-10-04 — **M14 已合**（PR #33, merge d43e4eb）。native signal handler（SIGSEGV/SIGABRT/SIGBUS）写 CrashStore 报告再 re-raise；`App.initEngine()` 传入 filesDir；build.gradle.kts 默认本地排除 Robolectric AgentCoreTest（CI `-PincludeRobolectric=true` 全量）。**M10/M5/M14 三连已合，开放 PR 清零。**
 - [opencode] 2026-10-04 — **M14 已实现**：`JNI_OnLoad` 注册 SIGSEGV/SIGABRT/SIGBUS signal handler；`native_crash_handler` 用 async-signal-safe syscall 向 `<crashDir>/last_crash.txt` 写最小报告再 re-raise（不吞信号、debuggerd 正常出 tombstone）。`App.initEngine()` 传入 filesDir。顺带工程化：build.gradle.kts 默认本地排除 Robolectric AgentCoreTest（`-PincludeRobolectric=true` 恢复，CI 全量）。本地 `assembleDebug` 通过、JVM 回归 182/182。PR #33 https://github.com/hit-droid/ACFCN/pull/33 等 CI。
 - [opencode] 2026-10-04 — **M10 已实现**：拆 5 段 `runFeature`，13 个 lateinit var → 私有 backing + getter；getter 抛 `AppNotInitializedException(feature)`。`failedFeatures` 暴露给 ViewModel 显示已坏特性。基线 +6（AppInitTest），164 → 170。PR #31 https://github.com/hit-droid/ACFCN/pull/31 等 CI。

@@ -95,6 +95,9 @@ class CodeRepository(
     fun installPlugin(name: String, dexBytes: ByteArray, entryClass: String): Boolean {
         val dex = File(pluginsDir, "$name.dex")
         dex.writeBytes(dexBytes)
+        // L10 — record the SHA-256 of the installed dex so we can detect tampering
+        // or corruption before loading it.
+        File(pluginsDir, "$name.sha256").writeText(sha256Hex(dexBytes))
         File(pluginsDir, "$name.entry").writeText(entryClass)
         return true
     }
@@ -102,10 +105,37 @@ class CodeRepository(
     fun pluginEntry(name: String): String? =
         File(pluginsDir, "$name.entry").takeIf { it.exists() }?.readText()?.trim()
 
+    /** Stored integrity digest (hex) for a plugin, or null if unknown. */
+    fun pluginDigest(name: String): String? =
+        File(pluginsDir, "$name.sha256").takeIf { it.exists() }?.readText()?.trim()
+
+    /**
+     * L10 — verifies the on-disk dex still matches the digest recorded at install
+     * time. Returns null on success, or a human-readable failure reason.
+     */
+    fun verifyPluginIntegrity(name: String): String? {
+        val dex = File(pluginsDir, "$name.dex")
+        if (!dex.isFile) return "plugin $name dex missing"
+        val expected = pluginDigest(name) ?: return "plugin $name has no recorded integrity digest; reinstall it"
+        val actual = runCatching { dex.readBytes() }.getOrNull()
+            ?: return "plugin $name dex unreadable"
+        return if (sha256Hex(actual).equals(expected, ignoreCase = true)) {
+            null
+        } else {
+            "plugin $name integrity check failed (dex modified or corrupted); reinstall it"
+        }
+    }
+
     fun deletePlugin(name: String): Boolean {
         val dex = File(pluginsDir, "$name.dex").delete()
         File(pluginsDir, "$name.entry").delete()
+        File(pluginsDir, "$name.sha256").delete()
         return dex
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        return md.digest(bytes).joinToString("") { "%02x".format(it) }
     }
 
     fun pluginsDir(): File = pluginsDir

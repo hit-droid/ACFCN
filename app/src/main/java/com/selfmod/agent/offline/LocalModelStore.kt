@@ -193,7 +193,9 @@ class LocalModelStore(private val context: Context) {
         }.getOrNull()
     }
 
-    /** Best-effort: resolve a content:// URI to a real file path via the provider's _data column. */
+    /**
+     * Best-effort: resolve a content:// URI to a real file path via the provider's _data column.
+     */
     private fun resolveRealPath(uri: Uri): String? {
         if (uri.scheme == "file") return uri.path
         return runCatching {
@@ -206,6 +208,32 @@ class LocalModelStore(private val context: Context) {
         }.getOrNull()
     }
 
+    /**
+     * L13 — the single source of truth for "what real path would [materialize]
+     * actually open for this model", *without* copying. This keeps [materialize]
+     * and [localPathFor] consistent: if a real provider path is directly readable
+     * we report it; otherwise the existing copied file in app storage is reported.
+     * A caller asking "is this model loadable locally" gets the same answer as
+     * one that actually materializes.
+     */
+    fun loadablePathFor(id: String): String? {
+        val m = find(id) ?: return null
+        // Real provider path takes precedence (matches materialize step 1).
+        resolveRealPath(Uri.parse(m.uri))?.let { p ->
+            val f = File(p)
+            if (f.exists() && f.canRead()) return f.absolutePath
+        }
+        // Fall back to an already-copied file (matches materialize step 2).
+        val candidate = File(modelsDir, sanitize(m.name))
+        return if (candidate.exists()) candidate.absolutePath else null
+    }
+
+    /**
+     * Path of the on-device *copy* (app storage) of this model, if one exists.
+     * Does NOT return a real provider path — this is specifically "is there a
+     * copy we can delete / that occupies app storage". Prefer [loadablePathFor]
+     * when asking whether the model can be loaded.
+     */
     fun localPathFor(id: String): String? {
         val m = find(id) ?: return null
         val candidate = File(modelsDir, sanitize(m.name))
