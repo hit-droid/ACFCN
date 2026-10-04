@@ -345,9 +345,20 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Copies the GGUF into app storage and loads it into the on-device engine. */
     fun loadOnDevice(m: LocalModel) {
+        // M13 + L9 combined. The AtomicBoolean gate is what makes "one load at a
+        // time" actually atomic (check-then-act on the StateFlow let double-taps
+        // race past it). It is taken *before* looking at _storageBusy so a wipe
+        // cannot slip in between the check and the copy.
         if (!engineBusyGate.compareAndSet(false, true)) return
+        // L9: refuse mid-wipe — the copy would land in a directory being emptied.
+        if (_storageBusy.value) {
+            engineBusyGate.set(false)
+            return
+        }
+        // Published before launching: clearModelCopies() reads _engineBusy to decide
+        // whether a load is in flight, and the gate alone is invisible to it.
+        _engineBusy.value = true
         viewModelScope.launch(Dispatchers.IO) {
-            _engineBusy.value = true
             _engineStatus.value = "正在检查设备…"
             com.selfmod.agent.util.Diagnostics.log(
                 "load", "开始加载 ${m.name} size=${m.sizeBytes / (1024 * 1024)}MB uri=${m.uri}",
@@ -516,11 +527,47 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         _storageMsg.value = "已清理缓存，释放 ${com.selfmod.agent.util.StorageStats.human(freed)}"
     }
 
+    private val _storageBusy = MutableStateFlow(false)
+    val storageBusy: StateFlow<Boolean> = _storageBusy.asStateFlow()
+
+    /** Bumped after an async wipe lands so the panel re-reads the sizes. */
+    private val _storageTick = MutableStateFlow(0)
+    val storageTick: StateFlow<Int> = _storageTick.asStateFlow()
+
+    /**
+     * L9: deleting the copied weights and releasing the on-device engine are one
+     * operation, not two. `nativeFree()` tears down a multi-GB mmap and used to run
+     * here on the main thread, which froze the UI for as long as the model was big —
+     * it now runs on IO. Refused while a load or a generation holds the file, since
+     * either would end up reading a path we just deleted. The stale status line is
+     * cleared too: the dot had already flipped to "未加载" while the green text above
+     * it still claimed a model was loaded. [storageTick] lets the storage panel
+     * refresh itself once the wipe lands instead of showing pre-wipe numbers.
+     */
     fun clearModelCopies() {
-        val freed = app.storage.clearModelCopies()
-        app.engine.unload()
-        _engineReady.value = false
-        _storageMsg.value = "已删除模型副本，释放 ${com.selfmod.agent.util.StorageStats.human(freed)}"
+        if (_storageBusy.value) return
+        ModelCopyWipe.refusal(_engineBusy.value, _busy.value)?.let {
+            _storageMsg.value = it
+            return
+        }
+        _storageBusy.value = true
+        _storageMsg.value = ModelCopyWipe.IN_PROGRESS
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val copied = app.models.list().count { app.models.localPathFor(it.id) != null }
+                val freed = app.storage.clearModelCopies()
+                app.engine.unload()
+                _engineReady.value = false
+                _engineStatus.value = ModelCopyWipe.AFTER_ENGINE
+                _engineProgress.value = -1f
+                _storageMsg.value = ModelCopyWipe.message(freed, copied)
+                _storageTick.value = _storageTick.value + 1
+            } catch (e: Throwable) {
+                _storageMsg.value = ModelCopyWipe.failure(e.message)
+            } finally {
+                _storageBusy.value = false
+            }
+        }
     }
 
     fun clearScriptVersions() {
