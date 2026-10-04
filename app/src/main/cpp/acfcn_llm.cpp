@@ -11,6 +11,11 @@
 #include <cstring>
 #include <chrono>
 #include <algorithm>
+#include <csignal>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include "llama.h"
 
@@ -20,9 +25,51 @@
 
 static JavaVM *g_jvm = nullptr;
 
+// ---------------------------------------------------------------------------
+// M14 — native crash capture. llama.cpp / our JNI bridge can SIGSEGV / SIGABRT /
+// SIGBUS (e.g. a bad GGUF tensor shape, mmap failure, corrupted model file) and
+// the Java Thread.UncaughtExceptionHandler never fires for those — the process
+// just dies and the CrashStore has no report to show on next launch.
+//
+// We install handlers that write a *minimal* report using only async-signal-safe
+// syscalls (open/write/close — never malloc, std::string, LOGI or JNI), then
+// re-raise so the process still dies and debuggerd still records the tombstone.
+// The report goes to the same file the Java CrashStore writes, so MainActivity
+// shows it identically. The path is provided by Java via nativeSetCrashDir.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Destination report path, set once from Java. Sized generously; a long
+// filesDir path is common. Atomic read in the handler is fine because the
+// path is written once before any model load and never mutated afterwards.
+constexpr size_t kCrashDirMax = 512;
+char g_crash_dir[kCrashDirMax] = {0};
+
+void install_signal_handlers();
+void native_crash_handler(int sig, siginfo_t * /*si*/, void * /*ctx*/);
+
+} // namespace
+
 extern "C" jint JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
     g_jvm = vm;
+    install_signal_handlers();
     return JNI_VERSION_1_6;
+}
+
+// M14: records the CrashStore directory so the native signal handler knows
+// where to write last_crash.txt. Called once from Java during library load,
+// before any model is loaded.
+extern "C" JNIEXPORT void JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeSetCrashDir(
+        JNIEnv *env, jclass /*clazz*/, jstring crashDir) {
+    if (crashDir == nullptr) return;
+    const char *utf = env->GetStringUTFChars(crashDir, nullptr);
+    if (utf == nullptr) return;
+    size_t len = strlen(utf);
+    if (len >= kCrashDirMax) len = kCrashDirMax - 1;
+    memcpy(g_crash_dir, utf, len);
+    g_crash_dir[len] = '\0';
+    env->ReleaseStringUTFChars(crashDir, utf);
 }
 
 namespace {
@@ -99,6 +146,67 @@ bool emit(JNIEnv *env, jobject cb, jmethodID mid, const std::string &piece) {
     jboolean keep = env->CallBooleanMethod(cb, mid, jp);
     env->DeleteLocalRef(jp);
     return keep == JNI_TRUE;
+}
+
+// --- M14 native crash handler -----------------------------------------------
+// Async-signal-safe. No heap, no std::string, no JNI, no logging. Writes a small
+// fixed-format report to <crash_dir>/last_crash.txt then re-raises the signal.
+void native_crash_handler(int sig, siginfo_t * /*si*/, void * /*ctx*/) {
+    if (g_crash_dir[0] != '\0') {
+        char path[kCrashDirMax + 16];
+        size_t n = 0;
+        for (; n < kCrashDirMax && g_crash_dir[n] != '\0'; ++n) path[n] = g_crash_dir[n];
+        const char suffix[] = "/last_crash.txt";
+        size_t s = 0;
+        for (; s < sizeof(suffix) - 1 && n + s < sizeof(path) - 1; ++s) {
+            path[n + s] = suffix[s];
+        }
+        path[n + s] = '\0';
+
+        const char header[] =
+            "ACFCN native crash\n"
+            "source: native signal\n"
+            "kind: SIGSEGV/SIGABRT/SIGBUS\n";
+        const char sigline[] = "signal: ";
+        const char sigdigits[4] = {
+            static_cast<char>('0' + (sig / 100) % 10),
+            static_cast<char>('0' + (sig / 10) % 10),
+            static_cast<char>('0' + sig % 10),
+            '\n',
+        };
+        const char hint[] =
+            "detail: crashed in the native LLM layer (llama.cpp / JNI bridge)\n"
+            "reported: native signal handler\n";
+
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            write(fd, header, sizeof(header) - 1);
+            write(fd, sigline, sizeof(sigline) - 1);
+            write(fd, sigdigits, sizeof(sigdigits));
+            write(fd, hint, sizeof(hint) - 1);
+            close(fd);
+        }
+    }
+
+    // Restore default disposition and re-raise so the process dies normally and
+    // debuggerd / the system still log the tombstone.
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sigaction(sig, &sa, nullptr);
+    raise(sig);
+}
+
+void install_signal_handlers() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = native_crash_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);
 }
 
 } // namespace

@@ -185,6 +185,10 @@ class App : Application() {
         runFeature("engine") {
             _engine = LocalLlmEngine()
             LocalLlmEngine.ensureLoaded()
+            // M14 — give the native signal handler the CrashStore directory so a
+            // SIGSEGV/SIGABRT/SIGBUS in llama.cpp still lands a report in the same
+            // file MainActivity checks on next launch.
+            runCatching { LocalLlmEngine.setNativeCrashDir(filesDir.absolutePath) }
             _llmClient = LlmClient(onDevice = _engine!!)
         }
     }
