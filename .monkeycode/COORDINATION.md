@@ -50,7 +50,7 @@
 - [x] H2 端侧全局锁 — **已修复**（PR #1, merge c9b47f4）
 - [x] H3 `config.timeoutSeconds` 未接入实际请求超时 — **已修复**（PR #10, merge bf7a9d7）
 - [x] H4 非原生工具历史 — **已修复**（PR #5, merge 1ba2974）
-- [@Qoder] H5 端侧上下文溢出无截断 — PR #4 `feat/ondevice-ctx-truncate`（待 rebase）
+- [x] H5 端侧上下文溢出无截断 — **已修复**（PR #4, merge 6f4d452；rebase 时保留 M9 `OnDevicePrompts.fold`）
 - [x] H6 浏览器 `navigate()` 可中断 — **已修复**（PR #2, merge 43dc398）
 - [x] H7 浏览器 `click/type` 索引防漂移 — **已修复**（PR #2, merge 43dc398）
 - [x] H8 崩溃存档静默丢失 — **已修复**（PR #6, merge c6e9297）
@@ -72,25 +72,25 @@
 - [x] M12 WebView saveState/restoreState/destroy — **已修复**（PR #3, merge 5e31008）
 - [x] M13 `LocalLlmEngine.load/unload` 无同步 — **已修复**（PR #24, merge 87f07a6；native 部分已被 H1/H2 覆盖，本次修 Kotlin 层）
 - [ ] M14 CrashHandler 无法捕获 native SIGSEGV
-- [ ] M15 测试覆盖不足：AgentCore/LocalLlmEngine 零测试
+- [x] M15 测试覆盖不足：AgentCore 20 例 — **已补**（PR #29, merge 531ca5e；LocalLlmEngine Kotlin 层已由 #24 覆盖）
 
 ### 低严重度
 - [x] L1 端侧 maxTokens 默认 2048 过大 — **已修复**（PR #21, 默认 512）
-- [ ] L2 `ToolRegistry.coerceArgs` 对纯文本参数"撒网式"填充
-- [ ] L3 `Tools.browserType/browserOpen/browserSnapshot` 返回格式不统一 — [@Qoder] PR #11 待 rebase
-- [ ] L4 `AgentScreen.EmptyChat` 示例不可点击 — [@Qoder] PR #8 待 rebase
-- [ ] L5 `MarkdownText` 不支持链接 — [@Qoder] PR #9 待 rebase
+- [x] L2 `ToolRegistry.coerceArgs` 对纯文本参数"撒网式"填充 — **已修复**（PR #28, merge 0bb2d95）
+- [x] L3 `Tools.browserType/browserOpen/browserSnapshot` 返回格式不统一 — **已修复**（PR #11, merge 54341db）
+- [x] L4 `AgentScreen.EmptyChat` 示例不可点击 — **已修复**（PR #8, merge b109923）
+- [x] L5 `MarkdownText` 不支持链接 — **已修复**（PR #9, merge 3e6a6f1）
 - [x] L6 `Diagnostics` 用非线程安全 SimpleDateFormat → **已修复**（da5d129）
-- [ ] L7 `OfflineScreen` 模型列表用 remember 快照 — [@Qoder] PR #7 待 rebase
+- [x] L7 `OfflineScreen` 模型列表用 remember 快照 — **已修复**（PR #7, merge 0f0612a）
 - [x] L8 `isLocalHost()` 漏判 172.17–172.31 私网段 → **已修复**（da5d129）
-- [ ] L9 `StorageStats.clearModelCopies` 未与引擎状态联动 — [@Qoder] PR #13 待 rebase
+- [x] L9 `StorageStats.clearModelCopies` 未与引擎状态联动 — **已修复**（PR #13, merge 7020c99）
 - [ ] L10 插件安装无签名/完整性校验
-- [ ] L11 `ScriptEngine` 无执行超时 — [@Qoder] PR #23 待 rebase
+- [x] L11 `ScriptEngine` 无执行超时 — **已修复**（PR #23, merge 1b4810c）
 - [x] L12 native 循环每次 `GetMethodID` — **已过时**（复核：`generate_impl` 每次*调用*只解析一次 methodID，H1/H2 重构已覆盖；每 token 仅必要的 NewStringUTF）
 - [ ] L13 `localPathFor` 与 `materialize` 路径语义不一致
 - [x] L14 `chatOllama` 忽略 tools — **已修复**（PR #25, merge 43fd080）
 - [x] L15 崩溃报告可能含 Key/header — **已修复**（PR #17, merge f1d9a09）
-- [ ] L16 `App.uiEvents` 缓冲溢出静默丢弃 — [@Qoder] PR #20 待 rebase
+- [x] L16 `App.uiEvents` 缓冲溢出静默丢弃 — **已修复**（PR #20, merge 43d9cbe）
 
 ---
 
@@ -109,12 +109,13 @@ echo "sdk.dir=/opt/android-sdk" > local.properties
 ```
 
 - 首次完整构建 ~9 分钟，增量 ~2 分钟，`assembleRelease`（R8）额外 ~4-12 分钟。
-- 当前基线：`testDebugUnitTest` **96/96**（SessionCodec 7、OnDevicePrompts 7、SecretRedactor 6、DeltaPacer 4、EngineLifecycle 8、LlmClientOllamaTools 3、CrashStore 6、StreamAssembler 8、ToolCallParser 8 等），`assembleDebug` 产出 ~45MB APK。
+- 当前基线：`testDebugUnitTest` 待本轮全量验证（已合 H5/L2–L5/L7/L9/L11/L16/M15；M7 单测 5、ContextBudget 5、CoerceArgs 18、AgentCore 20、ScriptEngine 6 等）。`assembleDebug` 产出 ~45MB APK。
 - release APK 未配签名 secrets（`ACFCN_*`），产出 unsigned，需自签后安装。
 
 ---
 
 ## 5. 变更记录（本板自身）
 
+- 2026-10-04 Qoder 额度用尽后 opencode 接管：rebase 并合并 #4 H5、#7 L7、#8 L4、#9 L5、#11 L3、#13 L9、#20 L16、#23 L11、#28 L2、#29 M15。开放 PR 清零，准备打 v2.8。
 - 2026-10-04 opencode 板改组：占用/留言拆分为每人一个文件（`board/*.md`），结束"每次合 PR 把别人全部打 dirty"的同文件冲突；任务清单状态同步（M9/M13/L14 已合，基线 96/96）。
 - 2026-10-02 opencode 建立本文件（领域表、任务清单、构建说明）。
