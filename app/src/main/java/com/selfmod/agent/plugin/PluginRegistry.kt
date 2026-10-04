@@ -21,6 +21,10 @@ class PluginRegistry(
     @Synchronized
     fun load(name: String): SelfModPlugin {
         loaded[name]?.let { return it }
+        // L10 — refuse to load a dex whose on-disk bytes no longer match the
+        // digest recorded at install time (tampering / corruption).
+        val integrityIssue = repo.verifyPluginIntegrity(name)
+        if (integrityIssue != null) error(integrityIssue)
         val dexFile = File(repo.pluginsDir(), "$name.dex")
         val entry = repo.pluginEntry(name)
             ?: error("Plugin $name has no entry descriptor; install it via repo.installPlugin first")
