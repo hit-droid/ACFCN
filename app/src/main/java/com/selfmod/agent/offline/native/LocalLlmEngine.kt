@@ -182,6 +182,14 @@ class LocalLlmEngine {
         @Volatile
         private var libLoaded = false
 
+        /** M14 — tell the native signal handler where to write last_crash.txt. */
+        fun setNativeCrashDir(dir: String) {
+            if (!ensureLoaded()) return
+            runCatching { nativeSetCrashDir(dir) }
+        }
+
+        private external fun nativeSetCrashDir(crashDir: String)
+
         fun ensureLoaded(): Boolean {
             if (libLoaded) return true
             return synchronized(this) {
