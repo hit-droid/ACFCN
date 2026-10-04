@@ -274,6 +274,32 @@ static jint generate_impl(
     }
     tokens.resize(n_tokens);
 
+    // Keep the prompt inside n_ctx or llama_decode fails with a vague -3.
+    // Reserve room for the generated reply, then drop the oldest turns from
+    // the middle while keeping the head (BOS/system) and the recent tail.
+    const int ctx_size = g_engine.n_ctx.load();
+    const int out_budget = maxTokens > 0 ? (int) maxTokens : 512;
+    int limit = ctx_size - out_budget;
+    if (limit < 8) limit = ctx_size / 2;
+    if (limit < 1) limit = ctx_size;
+    if ((int) tokens.size() > limit) {
+        int keep_head = std::min(4, limit / 4);
+        int keep_tail = limit - keep_head;
+        if (keep_tail < 0) { keep_head = 0; keep_tail = limit; }
+        std::vector<llama_token> trimmed;
+        trimmed.reserve(limit);
+        trimmed.insert(trimmed.end(), tokens.begin(), tokens.begin() + keep_head);
+        trimmed.insert(trimmed.end(), tokens.end() - keep_tail, tokens.end());
+        LOGI("prompt truncated: %d -> %d tokens (n_ctx=%d out_budget=%d, dropped %d)",
+             (int) tokens.size(), (int) trimmed.size(), ctx_size, out_budget,
+             (int) tokens.size() - (int) trimmed.size());
+        tokens.swap(trimmed);
+    }
+    if (tokens.empty()) {
+        LOGE("prompt is empty after truncation (n_ctx=%d)", ctx_size);
+        return -5;
+    }
+
     llama_memory_clear(llama_get_memory(ctx), true);
 
     llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
@@ -304,6 +330,12 @@ static jint generate_impl(
         if (rc == 2 || aborted()) {
             LOGI("prefill aborted by llama at pos %d rc=%d", pos, rc);
             result = -98;
+            fail = true;
+            break;
+        }
+        if (rc == 1) {
+            LOGE("prompt needs more KV slots at pos %d (n_ctx=%d)", pos, ctx_size);
+            result = -5;
             fail = true;
             break;
         }
@@ -362,6 +394,11 @@ static jint generate_impl(
                 LOGI("decode aborted at token %d rc=%d", i, rc);
                 result = -98;
                 fail = true;
+                break;
+            }
+            if (rc == 1) {
+                // Context window full: stop cleanly, the reply so far is valid.
+                LOGI("context full at token %d (n_ctx=%d), stopping", i, ctx_size);
                 break;
             }
             if (rc != 0) {
