@@ -23,12 +23,19 @@ class LocalLlmEngine {
     @Volatile
     private var loaded = false
 
+    // M13: single-flight load/unload gate. The native layer serializes on its
+    // own mutex, but overlapping Kotlin load() calls used to free each other's
+    // freshly loaded models (multi-GB mmap thrash) and could commit a stale
+    // `loaded` flag after an unload had freed the engine.
+    private val lifecycle = EngineLifecycle(loadedSetter = { loaded = it })
+
     fun isLoaded(): Boolean = loaded && ensureLoaded() && nativeIsReady()
 
     /**
      * @param nCtx context window (tokens). Larger = more RAM. 1024 is safer on 6GB phones.
      * @param nThreads worker threads; pass 0 to auto-detect.
      * @param nBatch prompt-eval chunk size. Smaller = less RAM / slower prefill.
+     * @return false when another load is already in flight.
      */
     fun load(
         modelFile: File,
@@ -37,37 +44,49 @@ class LocalLlmEngine {
         nBatch: Int = 64,
         onProgress: LoadCallback? = null,
     ): Boolean {
-        if (!ensureLoaded()) {
-            com.selfmod.agent.util.Diagnostics.log("engine", "load: native 库不可用")
+        val token = lifecycle.beginLoad() ?: run {
+            com.selfmod.agent.util.Diagnostics.log("engine", "load: 已有加载在进行，忽略本次请求")
             return false
         }
-        if (!modelFile.exists()) {
-            com.selfmod.agent.util.Diagnostics.log("engine", "load: 文件不存在 ${modelFile.absolutePath}")
-            return false
+        var attempted = false
+        var ok = false
+        try {
+            if (!ensureLoaded()) {
+                com.selfmod.agent.util.Diagnostics.log("engine", "load: native 库不可用")
+                return false
+            }
+            if (!modelFile.exists()) {
+                com.selfmod.agent.util.Diagnostics.log("engine", "load: 文件不存在 ${modelFile.absolutePath}")
+                return false
+            }
+            val threads = if (nThreads > 0) nThreads else defaultThreads()
+            com.selfmod.agent.util.Diagnostics.log(
+                "engine",
+                "load: ${modelFile.name} size=${modelFile.length() / (1024 * 1024)}MB " +
+                    "nCtx=$nCtx nBatch=$nBatch threads=$threads exists=${modelFile.canRead()}",
+            )
+            val t0 = System.currentTimeMillis()
+            attempted = true
+            ok = nativeInit(modelFile.absolutePath, nCtx, threads, nBatch, onProgress)
+            com.selfmod.agent.util.Diagnostics.log(
+                "engine",
+                "load 返回 $ok，耗时 ${System.currentTimeMillis() - t0}ms",
+            )
+            return ok
+        } finally {
+            lifecycle.endLoad(token, ok, attempted)
         }
-        val threads = if (nThreads > 0) nThreads else defaultThreads()
-        com.selfmod.agent.util.Diagnostics.log(
-            "engine",
-            "load: ${modelFile.name} size=${modelFile.length() / (1024 * 1024)}MB " +
-                "nCtx=$nCtx nBatch=$nBatch threads=$threads exists=${modelFile.canRead()}",
-        )
-        val t0 = System.currentTimeMillis()
-        loaded = nativeInit(modelFile.absolutePath, nCtx, threads, nBatch, onProgress)
-        com.selfmod.agent.util.Diagnostics.log(
-            "engine",
-            "load 返回 $loaded，耗时 ${System.currentTimeMillis() - t0}ms",
-        )
-        return loaded
     }
 
     fun unload() {
-        if (!ensureLoaded()) {
-            loaded = false
-            return
+        // withUnload: exclusive access + version bump, so an in-flight load's
+        // late commit is suppressed; nativeFree itself waits for the native
+        // mutex, i.e. a load in progress finishes first, then is freed.
+        lifecycle.withUnload {
+            if (!ensureLoaded()) return@withUnload
+            nativeCancel()
+            nativeFree()
         }
-        nativeCancel()
-        nativeFree()
-        loaded = false
     }
 
     /** Abort in-flight load or generate. Safe to call from any thread. */

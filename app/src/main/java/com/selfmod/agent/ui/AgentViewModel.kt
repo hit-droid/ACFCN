@@ -315,9 +315,13 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     /** 0..1 while copying/loading, -1 when idle. */
     val engineProgress: StateFlow<Float> = _engineProgress.asStateFlow()
 
+    // M13: check-then-act on the StateFlow let double-taps race past the guard;
+    // the CAS makes "one load at a time" atomic at the UI entry too.
+    private val engineBusyGate = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** Copies the GGUF into app storage and loads it into the on-device engine. */
     fun loadOnDevice(m: LocalModel) {
-        if (_engineBusy.value) return
+        if (!engineBusyGate.compareAndSet(false, true)) return
         viewModelScope.launch(Dispatchers.IO) {
             _engineBusy.value = true
             _engineStatus.value = "正在检查设备…"
@@ -429,6 +433,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _engineBusy.value = false
                 _engineProgress.value = -1f
+                engineBusyGate.set(false)
             }
         }
     }
