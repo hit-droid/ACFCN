@@ -64,7 +64,7 @@
 - [x] M4 `ToolCallParser.parseReact` 按行号配对错位 — **已修复**（PR #16, merge 156f743）
 - [ ] M5 `SettingsStore.llmConfig()` 在 getter 里做密钥迁移，有写盘副作用
 - [ ] M6 `ConfigScreen.currentCfg()` 丢失端侧字段 → **已修复**（da5d129）
-- [ ] M7 `SecretStore` 加密失败静默降级明文；加密判断靠类名字符串 — [@opencode] `fix/secret-store-fallback` 工作中
+- [x] M7 `SecretStore` 加密失败静默降级明文；加密判断靠类名字符串 — **已修复**（PR #30, merge ab8e5e8）
 - [x] M8 `SessionStore` 不存 toolCalls — **已修复**（PR #12, merge 88fa621）
 - [x] M9 端侧过滤 `tool` 角色消息时静默丢弃 — **已修复**（PR #14, merge 015fc75）
 - [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环
