@@ -17,14 +17,38 @@ class SettingsStore(context: Context) {
 
     val keysInitIssue: String? get() = secrets.initIssue
 
+    /**
+     * M5 — moves the legacy-key migration out of the read path. Old versions of
+     * [llmConfig] and [profiles] did `secrets.setCurrent(...)` / `secrets.setProfile(...)`
+     * and rewrote the config JSON inside their getter, so every read had a write side
+     * effect (and a crash loop on a wedged SecretStore). The migration now happens once,
+     * from [App.initPersistence], and the getters are pure.
+     *
+     * Returns the number of keys relocated from prefs JSON into the encrypted store, so
+     * callers and tests can assert "exactly once, not on every read".
+     */
+    fun migrateLegacySecretsIfNeeded(): Int {
+        val sink = SettingsStoreSecretSink(secrets)
+        val outcome = SecretMigrator.migrate(
+            llmJson = prefs.getString(KEY_LLM, null),
+            profilesJson = prefs.getString(KEY_PROFILES, null),
+            sink = sink,
+            decodeConfig = ::decodeConfig,
+            encodeConfig = { encodeConfig(it).toString() },
+        )
+        if (outcome.cleanedLlm != null) persistConfig(outcome.cleanedLlm)
+        if (outcome.cleanedProfilesJson != null) {
+            prefs.edit().putString(KEY_PROFILES, outcome.cleanedProfilesJson).apply()
+        }
+        return outcome.relocated
+    }
+
     fun llmConfig(): LlmConfig {
         val raw = prefs.getString(KEY_LLM, null) ?: return LlmConfig.DEFAULT
         val cfg = decodeConfig(raw) ?: LlmConfig.DEFAULT
         val stored = secrets.getCurrent()
-        if (cfg.apiKey.isNotBlank() && stored.isBlank()) {
-            secrets.setCurrent(cfg.apiKey)
-            persistConfig(cfg.copy(apiKey = ""))
-        }
+        // Pure read — no migration side effect. Legacy keys are relocated exactly once
+        // by [migrateLegacySecretsIfNeeded] at startup.
         return cfg.copy(apiKey = stored.ifBlank { cfg.apiKey })
     }
 
@@ -48,9 +72,7 @@ class SettingsStore(context: Context) {
             val cfg = decodeConfig(o.optJSONObject("config")?.toString().orEmpty()) ?: continue
             val id = o.optString("id")
             val key = secrets.getProfile(id).ifBlank { cfg.apiKey }
-            if (cfg.apiKey.isNotBlank() && secrets.getProfile(id).isBlank()) {
-                secrets.setProfile(id, cfg.apiKey)
-            }
+            // Pure read — no secret write side effect.
             out += SavedProfile(
                 id = id,
                 name = o.optString("name"),
