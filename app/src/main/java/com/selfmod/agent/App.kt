@@ -159,6 +159,11 @@ class App : Application() {
         runFeature("persistence") {
             val files = filesDir
             _settings = SettingsStore(this)
+            // M5 — relocate any legacy plain-text keys into the encrypted store
+            // exactly once. Without this, callers of llmConfig() / profiles()
+            // would either lose the keys (post-encryption builds) or do an
+            // unconditional write on every read (pre-encryption builds).
+            _settings?.migrateLegacySecretsIfNeeded()
             _repo = CodeRepository(
                 scriptsDir = File(files, "scripts"),
                 pluginsDir = File(files, "plugins"),
