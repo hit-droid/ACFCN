@@ -71,7 +71,7 @@
 - [x] M11 `onMainSync` 默认值 — **已修复**（PR #2, merge 43dc398）
 - [x] M12 WebView saveState/restoreState/destroy — **已修复**（PR #3, merge 5e31008）
 - [x] M13 `LocalLlmEngine.load/unload` 无同步 — **已修复**（PR #24, merge 87f07a6；native 部分已被 H1/H2 覆盖，本次修 Kotlin 层）
-- [ ] M14 CrashHandler 无法捕获 native SIGSEGV — PR #33 `fix/m14-native-crash-capture`（native signal handler 写 CrashStore 报告；待 CI 绿）
+- [x] M14 CrashHandler 无法捕获 native SIGSEGV — **已修复**（PR #33, merge d43e4eb；native signal handler 写 `<crashDir>/last_crash.txt` 再 re-raise，复用 CrashStore 展示）
 - [x] M15 测试覆盖不足：AgentCore 20 例 — **已补**（PR #29, merge 531ca5e；LocalLlmEngine Kotlin 层已由 #24 覆盖）
 
 ### 低严重度
@@ -116,6 +116,7 @@ echo "sdk.dir=/opt/android-sdk" > local.properties
 
 ## 5. 变更记录（本板自身）
 
+- 2026-10-04 opencode 合入 M14（PR #33, merge d43e4eb）。M10/M5/M14 全部落地，开放 PR 清零。
 - 2026-10-04 opencode 合入 M10（PR #31, merge 9a8b4c2）与 M5（PR #32, merge 3020c03），基线 182/182。M14 PR #33 待 CI。
 - 2026-10-04 opencode M14 提交：native signal handler（SIGSEGV/SIGABRT/SIGBUS）写 CrashStore 报告，`assembleDebug` + JVM 182/182 通过，PR #33。build.gradle.kts 新增默认本地排除 Robolectric AgentCoreTest。
 - 2026-10-04 Qoder 额度用尽后 opencode 接管：rebase 并合并 #4 H5、#7 L7、#8 L4、#9 L5、#11 L3、#13 L9、#20 L16、#23 L11、#28 L2、#29 M15。开放 PR 清零，准备打 v2.8。
