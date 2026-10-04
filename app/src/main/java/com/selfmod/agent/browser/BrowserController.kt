@@ -530,7 +530,7 @@ class BrowserController(
         private const val DESKTOP_UA =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-        private const val NAV_TIMEOUT_MS = 25_000L
+        internal const val NAV_TIMEOUT_MS = 25_000L
         private const val PAGE_SETTLE_MS = 350L
         private const val CLICK_SETTLE_MS = 400L
         private const val SETTLE_MAX_WAIT_MS = 5_000L
