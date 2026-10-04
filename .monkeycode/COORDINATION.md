@@ -84,10 +84,10 @@
 - [x] L7 `OfflineScreen` 模型列表用 remember 快照 — **已修复**（PR #7, merge 0f0612a）
 - [x] L8 `isLocalHost()` 漏判 172.17–172.31 私网段 → **已修复**（da5d129）
 - [x] L9 `StorageStats.clearModelCopies` 未与引擎状态联动 — **已修复**（PR #13, merge 7020c99）
-- [ ] L10 插件安装无签名/完整性校验
+- [ ] L10 插件安装无签名/完整性校验 — PR #34 `fix/l13-l10-path-integrity`（SHA-256 完整性校验，load 前验证；待 CI 绿）
 - [x] L11 `ScriptEngine` 无执行超时 — **已修复**（PR #23, merge 1b4810c）
 - [x] L12 native 循环每次 `GetMethodID` — **已过时**（复核：`generate_impl` 每次*调用*只解析一次 methodID，H1/H2 重构已覆盖；每 token 仅必要的 NewStringUTF）
-- [ ] L13 `localPathFor` 与 `materialize` 路径语义不一致
+- [ ] L13 `localPathFor` 与 `materialize` 路径语义不一致 — PR #34 `fix/l13-l10-path-integrity`（新增 `loadablePathFor` 统一事实来源；待 CI 绿）
 - [x] L14 `chatOllama` 忽略 tools — **已修复**（PR #25, merge 43fd080）
 - [x] L15 崩溃报告可能含 Key/header — **已修复**（PR #17, merge f1d9a09）
 - [x] L16 `App.uiEvents` 缓冲溢出静默丢弃 — **已修复**（PR #20, merge 43d9cbe）
@@ -116,6 +116,7 @@ echo "sdk.dir=/opt/android-sdk" > local.properties
 
 ## 5. 变更记录（本板自身）
 
+- 2026-10-04 opencode L10+L13 提交：插件 SHA-256 完整性校验 + `loadablePathFor` 路径语义统一，基线 182→188，PR #34。
 - 2026-10-04 opencode 合入 M14（PR #33, merge d43e4eb）。M10/M5/M14 全部落地，开放 PR 清零。
 - 2026-10-04 opencode 合入 M10（PR #31, merge 9a8b4c2）与 M5（PR #32, merge 3020c03），基线 182/182。M14 PR #33 待 CI。
 - 2026-10-04 opencode M14 提交：native signal handler（SIGSEGV/SIGABRT/SIGBUS）写 CrashStore 报告，`assembleDebug` + JVM 182/182 通过，PR #33。build.gradle.kts 新增默认本地排除 Robolectric AgentCoreTest。
