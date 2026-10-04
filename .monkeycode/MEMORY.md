@@ -50,3 +50,13 @@ This file records user instructions, preferences, and teachings for reference in
   - ACFCN 基线验证（2026-10-02，HEAD=302301b=v2.6）：assembleDebug 成功，产出 34MB APK，含 `lib/arm64-v8a/libacfcn_llm.so`；testDebugUnitTest 23/23 通过（PromptTemplates 3、LlmConfig 2、StreamAssembler 4、ToolCallParser 4、GgufHeader 6、OnDeviceTemplates 4）。
   - 首次完整构建约 9 分钟，之后增量 ~2 分钟。
   - CI：.github/workflows/release.yml，推 v* tag 触发：跑单测 + assembleDebug + assembleRelease（验证 R8）+ 可选签名 + 发布 Release 资产。
+
+[Project Knowledge Summary]
+- Date: 2026-10-04
+- Context: Discovered by Agent while running unit tests via background terminal (M8 branch)
+- Category: Environment Configuration / Troubleshooting & Debugging
+- Instructions:
+  - 坑：`background_terminal_create` 没有 workdir 参数，继承持久 shell 的当前目录，且该 cwd 可能是 `/workspace.SelfModAgent.bak`（旧备份树），导致 Gradle 编译了备份目录、报 "No tests found"。**所有后台终端命令必须显式 `cd /workspace &&` 开头**。
+  - `/workspace` 与 `/workspace.SelfModAgent.bak` 是两个不同目录（不同 inode）：前者是 ACFCN 主工作区，后者是 2026-10-02 之前的旧备份，勿混淆。
+  - 提交前基线已更新：testDebugUnitTest 80/80（SessionCodec 7、OnDevicePrompts 7、SecretRedactor 6、CrashStore 6、StreamAssembler 8、ToolCallParser 8 等），`assembleRelease` 本地约 12 分钟可跑通。
+  - 2026-10-04 起 GitHub Actions 因账户计费（payment failed / spending limit）全面中断，job 不启动、无日志无产物；修复前 PR 无法拿绿勾、v2.8 tag 无法发版。失败详情看 check-run annotations（logs blob 会 404）。

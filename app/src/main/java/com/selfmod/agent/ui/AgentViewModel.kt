@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.selfmod.agent.util.DeltaPacer
 
 data class TraceEntry(
     val ts: Long,
@@ -87,24 +89,33 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private val _probing = MutableStateFlow(false)
     val probing: StateFlow<Boolean> = _probing.asStateFlow()
 
+    // Declared before the init block: reset() (called from init) touches them.
+    private val streamBuffer = StringBuilder()
+    private val streamPacer = DeltaPacer()
+
     init {
         reset()
         loadSession()
     }
 
     private fun loadSession() {
-        runCatching {
-            val saved = app.sessions.load()
-            if (saved.isEmpty()) return
-            history.addAll(saved)
-            val restored = saved.filter { it.role == "user" || it.role == "assistant" }
-                .map { m ->
-                    val kind = if (m.role == "user") "user" else "answer"
-                    val title = if (m.role == "user") "你" else "答复"
-                    TraceEntry(System.currentTimeMillis(), kind, title, m.content)
-                }
-            _trace.value = restored
-            _lastUserText.value = saved.lastOrNull { it.role == "user" }?.content.orEmpty()
+        // H9: restoring up to ~640KB of JSON on the main thread froze first
+        // frame; decode off-main, apply on main only if the user hasn't acted.
+        viewModelScope.launch(Dispatchers.IO) {
+            val saved = runCatching { app.sessions.load() }.getOrDefault(emptyList())
+            withContext(Dispatchers.Main) {
+                if (saved.isEmpty()) return@withContext
+                if (_trace.value.isNotEmpty()) return@withContext
+                history.addAll(saved)
+                val restored = saved.filter { it.role == "user" || it.role == "assistant" }
+                    .map { m ->
+                        val kind = if (m.role == "user") "user" else "answer"
+                        val title = if (m.role == "user") "你" else "答复"
+                        TraceEntry(System.currentTimeMillis(), kind, title, m.content)
+                    }
+                _trace.value = restored
+                _lastUserText.value = saved.lastOrNull { it.role == "user" }?.content.orEmpty()
+            }
         }
     }
 
@@ -161,7 +172,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun persistSession() {
-        runCatching { app.sessions.save(history) }
+        // H9: encode off the main thread; snapshot first — `history` keeps
+        // mutating on the agent loop while we serialize.
+        val snapshot = ArrayList(history)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { app.sessions.save(snapshot) }
+        }
     }
 
     fun reset() {
@@ -170,6 +186,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         history.add(ChatMessage("system", agent.systemPrompt()))
         _trace.value = emptyList()
         _lastUserText.value = ""
+        streamBuffer.clear()
+        streamPacer.reset()
         runCatching { app.sessions.clear() }
     }
 
@@ -587,19 +605,33 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         _trace.value = _trace.value + entry
     }
 
-    private val streamBuffer = StringBuilder()
-
     private fun appendDelta(text: String) {
         streamBuffer.append(text)
+        // H9: 20-60 tokens/s each rebuilt the whole trace list and re-parsed
+        // markdown on the main thread; pacing to ~10 updates/s keeps the UI
+        // responsive (and stops stealing CPU from the decode thread).
+        if (!streamPacer.ready()) return
+        publishStream()
+    }
+
+    /** (Re)publishes the pending stream text as the trailing live bubble. */
+    private fun publishStream() {
         val cur = _trace.value
         val last = cur.lastOrNull()
         if (last != null && last.kind == "stream") {
             _trace.value = cur.dropLast(1) + last.copy(body = streamBuffer.toString())
         } else {
-            streamBuffer.clear()
-            streamBuffer.append(text)
-            _trace.value = cur + TraceEntry(System.currentTimeMillis(), "stream", "", text)
+            _trace.value = cur + TraceEntry(System.currentTimeMillis(), "stream", "", streamBuffer.toString())
         }
+    }
+
+    /**
+     * Force-publish pending text before a final step lands, so
+     * dropRedundantStream compares against fresh text instead of a throttled
+     * stale body (which would leave a duplicate bubble behind).
+     */
+    private fun flushStream() {
+        if (streamBuffer.isNotEmpty()) publishStream()
     }
 
     /** Removes a trailing live-stream bubble whose text equals the final message. */
@@ -617,24 +649,35 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             return TraceEntry(System.currentTimeMillis(), "delta", "", "")
         }
         return when (this) {
-            AgentStep.Started -> TraceEntry(System.currentTimeMillis(), "started", "开始", "")
+            AgentStep.Started -> {
+                streamPacer.reset()
+                TraceEntry(System.currentTimeMillis(), "started", "开始", "")
+            }
             is AgentStep.Thought -> {
+                flushStream()
                 dropRedundantStream(text)
                 streamBuffer.clear()
+                streamPacer.reset()
                 TraceEntry(System.currentTimeMillis(), "thought", "思考", text)
             }
             is AgentStep.Action -> {
+                flushStream()
                 streamBuffer.clear()
+                streamPacer.reset()
                 TraceEntry(System.currentTimeMillis(), "action", tool, args)
             }
             is AgentStep.Observation -> TraceEntry(System.currentTimeMillis(), "observation", "观察", result)
             is AgentStep.Answer -> {
+                flushStream()
                 dropRedundantStream(text)
                 streamBuffer.clear()
+                streamPacer.reset()
                 TraceEntry(System.currentTimeMillis(), "answer", "答复", text)
             }
             is AgentStep.Error -> {
+                flushStream()
                 streamBuffer.clear()
+                streamPacer.reset()
                 TraceEntry(System.currentTimeMillis(), "error", "错误", message)
             }
             is AgentStep.StreamDelta -> TraceEntry(System.currentTimeMillis(), "delta", "", "")

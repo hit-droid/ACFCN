@@ -123,6 +123,12 @@ class LlmConfigTest {
         assertEquals("Bearer sk-test", ok.authHeader())
     }
 
+    // L1：端侧 5-15 tok/s 下，2048 token 默认值意味着单条答复要生成数分钟。
+    @Test
+    fun maxTokensDefaultIsMobileFriendly() {
+        assertEquals(512, LlmConfig().maxTokens)
+    }
+
     @Test
     fun privateRangesAreLocal() {
         // 172.17–172.31 此前被旧的 startsWith("172.16.") 漏判。
