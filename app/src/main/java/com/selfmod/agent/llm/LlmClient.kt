@@ -53,7 +53,10 @@ class LlmClient(
         } catch (e: LlmException) {
             if (e.code == 499) throw e
             if (config.isLocalHost() && e.code in listOf(404, 405, 400)) {
-                runCatching { chatOllama(config, messages, onDelta, cancelled) }
+                // L14: the Ollama fallback used to drop the tool list, so a
+                // supportsNativeTools preset silently lost its tools the
+                // moment we fell off the OpenAI endpoint.
+                runCatching { chatOllama(config, messages, toolList, onDelta, cancelled) }
                     .recoverCatching { chatLlamaCpp(config, messages, onDelta, cancelled) }
                     .getOrElse { throw e }
             } else {
@@ -140,11 +143,15 @@ class LlmClient(
     private fun chatOllama(
         config: LlmConfig,
         messages: List<ChatMessage>,
+        tools: List<ToolSpec>,
         onDelta: ((String) -> Unit)?,
         cancelled: () -> Boolean,
     ): ChatResult {
         val root = config.baseUrl.trimEnd('/').removeSuffix("/v1").removeSuffix("/api")
-        val streaming = onDelta != null
+        // L14: with tools in play we go non-streaming — Ollama fragments
+        // tool_calls differently across versions; one complete response is
+        // the only shape that parses reliably.
+        val streaming = onDelta != null && tools.isEmpty()
         val msgs = JSONArray()
         messages.forEach { m ->
             msgs.put(JSONObject().put("role", ollamaRole(m.role)).put("content", m.content))
@@ -159,8 +166,27 @@ class LlmClient(
                     .put("temperature", config.temperature)
                     .put("num_predict", config.maxTokens),
             )
-            .toString()
-        val req = request(config, "$root/api/chat", body)
+        if (tools.isNotEmpty()) {
+            val arr = JSONArray()
+            tools.forEach { t ->
+                arr.put(
+                    JSONObject()
+                        .put("type", "function")
+                        .put(
+                            "function",
+                            JSONObject()
+                                .put("name", t.name)
+                                .put("description", t.description)
+                                .putOpt(
+                                    "parameters",
+                                    runCatching { JSONObject(t.parameters) }.getOrNull(),
+                                ),
+                        ),
+                )
+            }
+            body.put("tools", arr)
+        }
+        val req = request(config, "$root/api/chat", body.toString())
         return executeCall(config, req, cancelled) { resp ->
             val raw = if (!streaming) resp.body?.string().orEmpty() else ""
             if (!resp.isSuccessful) {
@@ -194,8 +220,32 @@ class LlmClient(
                 attachParsedTools(assembler.result(), emptyList())
             } else {
                 val obj = JSONObject(raw)
-                val content = obj.optJSONObject("message")?.optString("content").orEmpty()
-                attachParsedTools(ChatResult(content = content, raw = raw), emptyList())
+                val msg = obj.optJSONObject("message")
+                val content = msg?.optString("content").orEmpty()
+                var result = ChatResult(content = content, raw = raw)
+                val tcs = msg?.optJSONArray("tool_calls")
+                if (tcs != null && tcs.length() > 0) {
+                    val calls = ArrayList<ToolCall>()
+                    for (i in 0 until tcs.length()) {
+                        val tc = tcs.optJSONObject(i) ?: continue
+                        val fn = tc.optJSONObject("function") ?: continue
+                        calls += ToolCall(
+                            id = tc.optString("id").ifBlank { "ollama_$i" },
+                            function = ToolFunction(
+                                name = fn.optString("name"),
+                                arguments = when (val a = fn.opt("arguments")) {
+                                    is JSONObject -> a.toString()
+                                    is String -> a.ifBlank { "{}" }
+                                    else -> "{}"
+                                },
+                            ),
+                        )
+                    }
+                    if (calls.isNotEmpty()) {
+                        result = result.copy(toolCalls = calls, finishReason = "tool_calls")
+                    }
+                }
+                attachParsedTools(result, tools)
             }
         }
     }
