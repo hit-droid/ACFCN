@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.selfmod.agent.App
 import com.selfmod.agent.UiEvent
+import com.selfmod.agent.UiEventQueue
 import com.selfmod.agent.agent.AgentStep
 import com.selfmod.agent.browser.BrowserController
 import com.selfmod.agent.llm.ChatMessage
@@ -218,7 +219,20 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     val uiEventsFlow get() = app.uiEvents
 
     fun ingestUiEvent(e: UiEvent) {
+        // L16: events emitted while no screen was collecting arrive late; the queue also
+        // counts what it had to drop, so say so instead of pretending nothing happened.
+        val lost = app.uiQueue.acknowledgeDropped()
         push(TraceEntry(System.currentTimeMillis(), "ui", "UI事件: ${e.action}", e.payload))
+        if (lost > 0) {
+            push(
+                TraceEntry(
+                    System.currentTimeMillis(),
+                    "ui",
+                    "UI事件队列已满",
+                    "有 $lost 条通知在队列写满时被丢弃（容量 ${UiEventQueue.UI_QUEUE_CAPACITY}），后面的内容不再补发。",
+                )
+            )
+        }
     }
 
     fun setOfflineMode(on: Boolean) {
