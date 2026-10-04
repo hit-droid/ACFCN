@@ -67,7 +67,7 @@
 - [x] M7 `SecretStore` 加密失败静默降级明文；加密判断靠类名字符串 — **已修复**（PR #30, merge ab8e5e8）
 - [x] M8 `SessionStore` 不存 toolCalls — **已修复**（PR #12, merge 88fa621）
 - [x] M9 端侧过滤 `tool` 角色消息时静默丢弃 — **已修复**（PR #14, merge 015fc75）
-- [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环
+- [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环 — PR #31 `fix/app-m10-initfail-safe`（待 CI 绿）
 - [x] M11 `onMainSync` 默认值 — **已修复**（PR #2, merge 43dc398）
 - [x] M12 WebView saveState/restoreState/destroy — **已修复**（PR #3, merge 5e31008）
 - [x] M13 `LocalLlmEngine.load/unload` 无同步 — **已修复**（PR #24, merge 87f07a6；native 部分已被 H1/H2 覆盖，本次修 Kotlin 层）
