@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import java.io.File
 
@@ -80,80 +81,168 @@ internal class UiEventQueue(capacity: Int = UI_QUEUE_CAPACITY) {
 
 private const val TAG = "ACFCN"
 
-class App : Application() {
-    lateinit var settings: SettingsStore
-    lateinit var repo: CodeRepository
-    lateinit var plugins: PluginRegistry
-    lateinit var llmClient: LlmClient
-    lateinit var scriptEngine: ScriptEngine
-    lateinit var scriptHost: ScriptApi
-    lateinit var agent: AgentCore
-    lateinit var browser: BrowserController
-    lateinit var models: LocalModelStore
-    lateinit var tester: ConnectionTester
-    lateinit var sessions: SessionStore
-    lateinit var engine: LocalLlmEngine
-    lateinit var crashStore: CrashStore
-    lateinit var storage: StorageStats
+/**
+ * Thrown when a feature was not initialised (e.g. M10 — `App.initAll()` bailed out
+ * partway). Replaces the old `UninitializedPropertyAccessException` whose message did
+ * not even name the missing feature, and used to feed a crash loop.
+ */
+class AppNotInitializedException(feature: String, cause: Throwable? = null) :
+    IllegalStateException("App feature '$feature' is not initialised", cause)
 
-    internal val uiQueue = UiEventQueue()
-    val uiEvents: Flow<UiEvent> = uiQueue.events
+class App : Application() {
+    // Backing fields. The public read-only properties below throw a controlled
+    // [AppNotInitializedException] if a feature's init block failed, instead of the
+    // previous [UninitializedPropertyAccessException] which had no feature name and
+    // re-triggered the crash handler on every subsequent access.
+    private var _settings: SettingsStore? = null
+    private var _repo: CodeRepository? = null
+    private var _plugins: PluginRegistry? = null
+    private var _llmClient: LlmClient? = null
+    private var _scriptEngine: ScriptEngine? = null
+    private var _scriptHost: ScriptApi? = null
+    private var _agent: AgentCore? = null
+    private var _browser: BrowserController? = null
+    private var _models: LocalModelStore? = null
+    private var _tester: ConnectionTester? = null
+    private var _sessions: SessionStore? = null
+    private var _engine: LocalLlmEngine? = null
+    private var _crashStore: CrashStore? = null
+    private var _storage: StorageStats? = null
+
+    // uiQueue is constructed eagerly and never fails in practice; guarded by a
+    // nullable indirection so a future failure path can't take down every collector.
+    internal var uiQueue: UiEventQueue? = UiEventQueue()
+    val uiEvents: Flow<UiEvent> get() = uiQueue?.events ?: emptyFlow()
+
+    val settings: SettingsStore get() = _settings ?: fail("settings")
+    val repo: CodeRepository get() = _repo ?: fail("repo")
+    val plugins: PluginRegistry get() = _plugins ?: fail("plugins")
+    val llmClient: LlmClient get() = _llmClient ?: fail("llmClient")
+    val scriptEngine: ScriptEngine get() = _scriptEngine ?: fail("scriptEngine")
+    val scriptHost: ScriptApi get() = _scriptHost ?: fail("scriptHost")
+    val agent: AgentCore get() = _agent ?: fail("agent")
+    val browser: BrowserController get() = _browser ?: fail("browser")
+    val models: LocalModelStore get() = _models ?: fail("models")
+    val tester: ConnectionTester get() = _tester ?: fail("tester")
+    val sessions: SessionStore get() = _sessions ?: fail("sessions")
+    val engine: LocalLlmEngine get() = _engine ?: fail("engine")
+    val crashStore: CrashStore get() = _crashStore ?: fail("crashStore")
+    val storage: StorageStats get() = _storage ?: fail("storage")
+
+    /** Names of features whose init block threw; surfaced by `AgentViewModel` to
+     *  show the user what's broken instead of letting them tap a tab that crashes. */
+    val failedFeatures: Set<String> get() = _failedFeatures
+    private val _failedFeatures = mutableSetOf<String>()
 
     private val uiNotifier: (String, String) -> Unit = { action, payload ->
-        uiQueue.offer(action, payload)
+        uiQueue?.offer(action, payload)
     }
 
     override fun onCreate() {
         super.onCreate()
-        crashStore = CrashStore(this)
-        storage = StorageStats(this)
+        // The two pieces that only need `Context` are constructed first so they are
+        // always available — even if every later init step explodes.
+        _crashStore = CrashStore(this)
+        _storage = StorageStats(this)
+        uiQueue = UiEventQueue()
         runCatching { CrashHandler.install(crashStore) }
-        runCatching { initAll() }.onFailure {
-            Log.e(TAG, "App init FAILED — app will start but features may be broken", it)
+        // Each feature block owns its own slot; failure on one feature is recorded
+        // and contained so we never end up with a half-built singleton.
+        initPersistence()
+        initEngine()
+        initScripts()
+        initBrowser()
+        initAgent()
+    }
+
+    private fun initPersistence() {
+        runFeature("persistence") {
+            val files = filesDir
+            _settings = SettingsStore(this)
+            _repo = CodeRepository(
+                scriptsDir = File(files, "scripts"),
+                pluginsDir = File(files, "plugins"),
+                versionsDir = File(files, "versions"),
+            )
+            // Asset scripts are best-effort — missing assets are not a fatal init
+            // error, just log and move on.
+            runCatching { _repo?.importAssetScript(this, "hello.js", "hello") }
+            runCatching { _repo?.importAssetScript(this, "demo.js", "demo") }
+            runCatching { _repo?.importAssetScript(this, "offline_agent.js", "offline_agent") }
+            _plugins = PluginRegistry(_repo!!, File(files, "odex"))
+            _models = LocalModelStore(this)
+            _tester = ConnectionTester()
+            _sessions = SessionStore(this)
         }
     }
 
-    private fun initAll() {
-        val files = filesDir
-        settings = SettingsStore(this)
-        repo = CodeRepository(
-            scriptsDir = File(files, "scripts"),
-            pluginsDir = File(files, "plugins"),
-            versionsDir = File(files, "versions"),
-        )
-        runCatching { repo.importAssetScript(this, "hello.js", "hello") }
-        runCatching { repo.importAssetScript(this, "demo.js", "demo") }
-        runCatching { repo.importAssetScript(this, "offline_agent.js", "offline_agent") }
-        plugins = PluginRegistry(repo, File(files, "odex"))
-        engine = LocalLlmEngine()
-        LocalLlmEngine.ensureLoaded()
-        llmClient = LlmClient(onDevice = engine)
-        scriptEngine = ScriptEngine()
-        browser = BrowserController()
-        models = LocalModelStore(this)
-        tester = ConnectionTester()
-        sessions = SessionStore(this)
-        scriptHost = ScriptHost(
-            appContext = this,
-            repo = repo,
-            plugins = plugins,
-            settings = settings,
-            llmClient = llmClient,
-            uiNotifier = uiNotifier,
-        )
-        agent = AgentCore(
-            llmClient = llmClient,
-            settings = settings,
-            scriptEngine = scriptEngine,
-            scriptHost = scriptHost,
-            repo = repo,
-            plugins = plugins,
-            uiNotifier = uiNotifier,
-            browser = browser,
-            models = models,
-        )
-        Log.i(TAG, "App initialized OK")
+    private fun initEngine() {
+        runFeature("engine") {
+            _engine = LocalLlmEngine()
+            LocalLlmEngine.ensureLoaded()
+            _llmClient = LlmClient(onDevice = _engine!!)
+        }
     }
+
+    private fun initScripts() {
+        runFeature("scripts") {
+            _scriptEngine = ScriptEngine()
+        }
+    }
+
+    private fun initBrowser() {
+        runFeature("browser") {
+            _browser = BrowserController()
+        }
+    }
+
+    private fun initAgent() {
+        // The agent depends on every preceding slot. If any dependency is null we
+        // treat that as a hard skip — the user will see "agent unavailable" rather
+        // than a half-built AgentCore that crashes on its first tool call.
+        if (_settings == null || _repo == null || _plugins == null ||
+            _llmClient == null || _scriptEngine == null || _browser == null ||
+            _models == null
+        ) {
+            Log.w(TAG, "app_init agent skipped — missing dependency")
+            _failedFeatures.add("agent")
+            return
+        }
+        runFeature("agent") {
+            _scriptHost = ScriptHost(
+                appContext = this,
+                repo = _repo!!,
+                plugins = _plugins!!,
+                settings = _settings!!,
+                llmClient = _llmClient!!,
+                uiNotifier = uiNotifier,
+            )
+            _agent = AgentCore(
+                llmClient = _llmClient!!,
+                settings = _settings!!,
+                scriptEngine = _scriptEngine!!,
+                scriptHost = _scriptHost!!,
+                repo = _repo!!,
+                plugins = _plugins!!,
+                uiNotifier = uiNotifier,
+                browser = _browser!!,
+                models = _models!!,
+            )
+        }
+    }
+
+    private inline fun runFeature(feature: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            Log.e(TAG, "app_init $feature failed: ${t.javaClass.simpleName}: ${t.message}", t)
+            _failedFeatures.add(feature)
+            runCatching { _crashStore?.save(t) }
+        }
+    }
+
+    private fun fail(feature: String): Nothing =
+        throw AppNotInitializedException(feature)
 
     fun uiNotifier(): (String, String) -> Unit = uiNotifier
 }
