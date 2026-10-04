@@ -62,12 +62,12 @@
 - [ ] M2 采样参数不支持 seed/repeat/presence/frequency penalty；远程未发 top_p/top_k（需 ui/ 配字段，找 Qoder 对齐）
 - [x] M3 `StreamAssembler.applyJson` tool_calls index 回退缺陷；name 重复追加 — **已修复**（PR #15, merge 4e4edc1）
 - [x] M4 `ToolCallParser.parseReact` 按行号配对错位 — **已修复**（PR #16, merge 156f743）
-- [ ] M5 `SettingsStore.llmConfig()` 在 getter 里做密钥迁移，有写盘副作用
+- [x] M5 `SettingsStore.llmConfig()` 在 getter 里做密钥迁移，有写盘副作用 — **已修复**（PR #32, merge 3020c03；`llmConfig()`/`profiles()` 纯读取，`migrateLegacySecretsIfNeeded()` 抽到 `SecretMigrator`）
 - [ ] M6 `ConfigScreen.currentCfg()` 丢失端侧字段 → **已修复**（da5d129）
 - [x] M7 `SecretStore` 加密失败静默降级明文；加密判断靠类名字符串 — **已修复**（PR #30, merge ab8e5e8）
 - [x] M8 `SessionStore` 不存 toolCalls — **已修复**（PR #12, merge 88fa621）
 - [x] M9 端侧过滤 `tool` 角色消息时静默丢弃 — **已修复**（PR #14, merge 015fc75）
-- [ ] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环 — PR #31 `fix/app-m10-initfail-safe`（待 CI 绿）
+- [x] M10 `App.initAll()` 失败后 lateinit 未初始化，可能崩溃循环 — **已修复**（PR #31, merge 9a8b4c2；13 个 lateinit → 私有 backing + getter 抛 `AppNotInitializedException`，拆 5 段 `runFeature`）
 - [x] M11 `onMainSync` 默认值 — **已修复**（PR #2, merge 43dc398）
 - [x] M12 WebView saveState/restoreState/destroy — **已修复**（PR #3, merge 5e31008）
 - [x] M13 `LocalLlmEngine.load/unload` 无同步 — **已修复**（PR #24, merge 87f07a6；native 部分已被 H1/H2 覆盖，本次修 Kotlin 层）
@@ -116,6 +116,7 @@ echo "sdk.dir=/opt/android-sdk" > local.properties
 
 ## 5. 变更记录（本板自身）
 
+- 2026-10-04 opencode 合入 M10（PR #31, merge 9a8b4c2）与 M5（PR #32, merge 3020c03），基线 182/182。M14 PR #33 待 CI。
 - 2026-10-04 Qoder 额度用尽后 opencode 接管：rebase 并合并 #4 H5、#7 L7、#8 L4、#9 L5、#11 L3、#13 L9、#20 L16、#23 L11、#28 L2、#29 M15。开放 PR 清零，准备打 v2.8。
 - 2026-10-04 opencode 板改组：占用/留言拆分为每人一个文件（`board/*.md`），结束"每次合 PR 把别人全部打 dirty"的同文件冲突；任务清单状态同步（M9/M13/L14 已合，基线 96/96）。
 - 2026-10-02 opencode 建立本文件（领域表、任务清单、构建说明）。
