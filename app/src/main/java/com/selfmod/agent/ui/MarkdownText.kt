@@ -25,12 +25,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.selfmod.agent.ui.theme.AccentBlue
@@ -99,81 +104,118 @@ private object MarkdownParser {
         flushPara()
         return blocks
     }
-
-    fun inline(text: String): AnnotatedString = buildAnnotatedString {
-        var i = 0
-        val n = text.length
-        while (i < n) {
-            when {
-                text.startsWith("**", i) -> {
-                    val end = text.indexOf("**", i + 2)
-                    if (end > i) {
-                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(text.substring(i + 2, end)) }
-                        i = end + 2
-                    } else { append(text[i]); i++ }
-                }
-                text.startsWith("`", i) -> {
-                    val end = text.indexOf('`', i + 1)
-                    if (end > i) {
-                        withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = SurfaceVariant, color = AccentBlue)) {
-                            append(text.substring(i + 1, end))
-                        }
-                        i = end + 1
-                    } else { append(text[i]); i++ }
-                }
-                text.startsWith("*", i) || text.startsWith("_", i) -> {
-                    val marker = text[i]
-                    val end = text.indexOf(marker, i + 1)
-                    if (end > i + 1) {
-                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(text.substring(i + 1, end)) }
-                        i = end + 1
-                    } else { append(text[i]); i++ }
-                }
-                else -> { append(text[i]); i++ }
-            }
-        }
-    }
 }
 
+/**
+ * Inline markdown in a chat bubble: bold / italic / code / `[label](url)`.
+ *
+ * A link becomes a `LinkAnnotation.Url`, which `Text` resolves through
+ * `LocalUriHandler` — i.e. tapping a link opens it in the system browser.
+ */
 @Composable
 fun MarkdownText(md: String, modifier: Modifier = Modifier, baseColor: Color = TextPrimary) {
     val blocks = remember(md) { MarkdownParser.parse(md) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is MdBlock.Heading -> Text(
-                    MarkdownParser.inline(block.text),
-                    color = baseColor,
+                is MdBlock.Heading -> InlineText(
+                    block.text,
+                    baseColor,
                     fontSize = when (block.level) { 1 -> 20.sp; 2 -> 17.sp; else -> 15.sp },
                     fontWeight = FontWeight.SemiBold,
                 )
-                is MdBlock.Paragraph -> Text(
-                    MarkdownParser.inline(block.text),
-                    color = baseColor,
+                is MdBlock.Paragraph -> InlineText(
+                    block.text,
+                    baseColor,
                     fontSize = 15.sp,
                     lineHeight = 21.sp,
                 )
                 is MdBlock.Bullet -> Row(Modifier.fillMaxWidth()) {
                     Text("•", color = AccentBlue, fontSize = 15.sp, modifier = Modifier.width(16.dp))
-                    Text(MarkdownParser.inline(block.text), color = baseColor, fontSize = 15.sp, lineHeight = 21.sp)
+                    InlineText(block.text, baseColor, fontSize = 15.sp, lineHeight = 21.sp)
                 }
                 is MdBlock.Numbered -> Row(Modifier.fillMaxWidth()) {
                     Text("${block.index}.", color = AccentBlue, fontSize = 15.sp, modifier = Modifier.width(22.dp))
-                    Text(MarkdownParser.inline(block.text), color = baseColor, fontSize = 15.sp, lineHeight = 21.sp)
+                    InlineText(block.text, baseColor, fontSize = 15.sp, lineHeight = 21.sp)
                 }
                 is MdBlock.Quote -> Row(
                     Modifier.fillMaxWidth().background(SurfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(6.dp)),
                 ) {
                     Box(Modifier.width(3.dp).padding(vertical = 4.dp).background(AccentBlue))
-                    Text(
-                        MarkdownParser.inline(block.text),
-                        color = TextSecondary,
+                    InlineText(
+                        block.text,
+                        TextSecondary,
                         fontSize = 14.sp,
                         modifier = Modifier.padding(8.dp),
                     )
                 }
                 is MdBlock.Code -> CodeBlock(block.lang, block.code)
             }
+        }
+    }
+}
+
+@Composable
+private fun InlineText(
+    text: String,
+    baseColor: Color,
+    fontSize: TextUnit,
+    modifier: Modifier = Modifier,
+    lineHeight: TextUnit = TextUnit.Unspecified,
+    fontWeight: FontWeight? = null,
+) {
+    val annotated = remember(text, baseColor) {
+        InlineSpanParser.parse(text).toAnnotated(baseColor)
+    }
+    // LinkAnnotation is picked up by Text itself (UriHandler opens the URL), so the
+    // whole block only needs to be measurable when a link is actually present.
+    Text(
+        annotated,
+        style = TextStyle(
+            color = baseColor,
+            fontSize = fontSize,
+            lineHeight = lineHeight,
+            fontWeight = fontWeight,
+        ),
+        modifier = modifier,
+    )
+}
+
+/** Answer text is untrusted, so only web/mail links get an annotation at all. */
+internal fun isSafeUrl(url: String): Boolean =
+    url.startsWith("http://", ignoreCase = true) ||
+        url.startsWith("https://", ignoreCase = true) ||
+        url.startsWith("mailto:", ignoreCase = true)
+
+internal fun List<InlineSpan>.toAnnotated(baseColor: Color): AnnotatedString = buildAnnotatedString {
+    this@toAnnotated.forEach { span ->
+        val style = when (span.kind) {
+            InlineKind.Plain -> SpanStyle(color = baseColor)
+            InlineKind.Bold -> SpanStyle(color = baseColor, fontWeight = FontWeight.Bold)
+            InlineKind.Italic -> SpanStyle(color = baseColor, fontStyle = FontStyle.Italic)
+            InlineKind.Code -> SpanStyle(
+                fontFamily = FontFamily.Monospace,
+                background = SurfaceVariant,
+                color = AccentBlue,
+            )
+        }
+        val link = span.url?.takeIf { isSafeUrl(it) }
+        if (link == null) {
+            withStyle(style) { append(span.text) }
+        } else {
+            pushLink(
+                LinkAnnotation.Url(
+                    url = link,
+                    styles = TextLinkStyles(
+                        style = style + SpanStyle(
+                            color = AccentBlue,
+                            textDecoration = TextDecoration.Underline,
+                        ),
+                    ),
+                ),
+            )
+            append(span.text)
+            pop()
         }
     }
 }
