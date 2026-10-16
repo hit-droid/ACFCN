@@ -17,12 +17,46 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 
 #include "llama.h"
 
 #define LOG_TAG "ACFCN-LLM"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// Forward llama.cpp / ggml logs (including the OpenCL backend's device and
+// kernel messages) to logcat. Without this they go to stderr and are lost in an
+// Android app, which makes on-device diagnosis impossible.
+// Inspect with: adb logcat -s ACFCN-LLM
+static int llama_log_level_to_android(enum ggml_log_level level) {
+    switch (level) {
+        case GGML_LOG_LEVEL_ERROR: return ANDROID_LOG_ERROR;
+        case GGML_LOG_LEVEL_WARN:  return ANDROID_LOG_WARN;
+        case GGML_LOG_LEVEL_DEBUG: return ANDROID_LOG_DEBUG;
+        default:                   return ANDROID_LOG_INFO;
+    }
+}
+
+static void llama_log_to_logcat(enum ggml_log_level level, const char *text, void * /*user_data*/) {
+    if (text == nullptr) return;
+    __android_log_write(llama_log_level_to_android(level), LOG_TAG, text);
+}
+
+// Runtime tuning without rebuilding, read once at model load:
+//   adb shell setprop debug.acfcn.gpu_layers 99   # offload all layers to GPU
+//   adb shell setprop debug.acfcn.gpu_layers 0    # force CPU
+//   adb shell setprop debug.acfcn.threads 8       # override thread count
+// Property changes take effect on the next model load.
+static int get_property_int(const char *name, int fallback) {
+    char value[PROP_VALUE_MAX] = {0};
+    int len = __system_property_get(name, value);
+    if (len <= 0) return fallback;
+    char *end = nullptr;
+    long parsed = strtol(value, &end, 10);
+    if (end == value) return fallback;
+    return (int) parsed;
+}
 
 static JavaVM *g_jvm = nullptr;
 
@@ -53,6 +87,7 @@ void native_crash_handler(int sig, siginfo_t * /*si*/, void * /*ctx*/);
 
 extern "C" jint JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
     g_jvm = vm;
+    llama_log_set(llama_log_to_logcat, nullptr);
     install_signal_handlers();
     return JNI_VERSION_1_6;
 }
@@ -286,10 +321,17 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 
     llama_model_params mparams = llama_model_default_params();
 #ifdef ACFCN_USE_OPENCL
-    // Offload every layer to the Adreno GPU (OpenCL backend). This is the main
-    // reason the OpenCL build is much faster than pure CPU: the Adreno-optimized
-    // matmul kernels run the whole model on the GPU.
-    mparams.n_gpu_layers = 99;
+    // The OpenCL backend is compiled in, but GPU offload is opt-in and defaults
+    // to CPU: the Adreno-optimized path is only faster on some GPUs (Adreno 740
+    // is not in the upstream verified list). Enable it per run with
+    //   adb shell setprop debug.acfcn.gpu_layers 99
+    // The CPU path itself is fast here because CMake builds it with the ARM
+    // dotprod + fp16 kernels (see GGML_CPU_ARM_ARCH).
+    int gpu_layers = get_property_int("debug.acfcn.gpu_layers", 0);
+    if (gpu_layers < 0) gpu_layers = 0;
+    mparams.n_gpu_layers = gpu_layers;
+    LOGI("OpenCL backend built in; n_gpu_layers=%d (override: debug.acfcn.gpu_layers)",
+         (int) mparams.n_gpu_layers);
 #else
     mparams.n_gpu_layers = 0; // CPU only; keeps it portable across all arm64 phones
 #endif
@@ -334,14 +376,17 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     int batch = nBatch > 0 ? (int) nBatch : 64;
     if (batch < 8) batch = 8;
     if (batch > 512) batch = 512;
+    int threads = nThreads;
+    int prop_threads = get_property_int("debug.acfcn.threads", 0);
+    if (prop_threads > 0) threads = prop_threads;
     cparams.n_ctx     = (uint32_t) nCtx;
     cparams.n_batch   = (uint32_t) batch;
     cparams.n_ubatch  = (uint32_t) batch;
-    cparams.n_threads = nThreads;
-    cparams.n_threads_batch = nThreads;
+    cparams.n_threads = threads;
+    cparams.n_threads_batch = threads;
 
     LOGI("ctx params: n_ctx=%u n_batch=%u n_ubatch=%u threads=%d",
-         cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, nThreads);
+         cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, threads);
 
     g_engine.ctx = llama_init_from_model(g_engine.model, cparams);
     if (!g_engine.ctx) {
@@ -528,8 +573,12 @@ static jint generate_impl(
     if (!fail) {
         auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - prefill_t0).count();
-        LOGI("prefill done in %lld ms", (long long) prefill_ms);
+        double prefill_tps = prefill_ms > 0
+                ? (double) tokens.size() * 1000.0 / (double) prefill_ms : 0.0;
+        LOGI("prefill done in %lld ms (%d tokens, %.2f tok/s)",
+             (long long) prefill_ms, (int) tokens.size(), prefill_tps);
 
+        auto decode_t0 = std::chrono::steady_clock::now();
         std::vector<char> buf(256);
         for (int i = 0; i < maxTokens; ++i) {
             if (aborted()) {
@@ -584,6 +633,12 @@ static jint generate_impl(
             }
         }
         if (!fail) result = emitted;
+
+        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - decode_t0).count();
+        double decode_tps = decode_ms > 0 ? (double) emitted * 1000.0 / (double) decode_ms : 0.0;
+        LOGI("decode done in %lld ms (%d tokens, %.2f tok/s)",
+             (long long) decode_ms, emitted, decode_tps);
     }
 
     llama_sampler_free(smpl);

@@ -16,6 +16,13 @@ set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
+# Build the CPU backend with the ARMv8.2 dotprod + fp16 kernels. The NDK
+# toolchain defaults to the plain armv8-a baseline, which lacks SDOT/UDOT and
+# makes quantized (Q4_K) matmul several times slower. These extensions are
+# present on every Cortex-A75/A55-era core and newer (2017+), and ggml gates its
+# optimized kernels on __ARM_FEATURE_DOTPROD, which -march turns on.
+set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+
 # OpenCL backend for Adreno GPU offload. Off by default: the backend needs
 # OpenCL headers + an ICD loader staged in the NDK sysroot (CI wires this up,
 # see .github/workflows/*.yml via scripts/setup-opencl-ndk.sh). Without that
