@@ -20,7 +20,7 @@
 set -euo pipefail
 
 ABI="${1:-arm64-v8a}"
-ANDROID_PLATFORM="${ANDROID_PLATFORM:-28}"
+ANDROID_PLATFORM="${ANDROID_PLATFORM:-26}"
 
 OPENCL_HEADERS_TAG="v2024.10.24"
 OPENCL_ICD_LOADER_TAG="v2024.10.24"
@@ -36,13 +36,21 @@ case "$ABI" in
 esac
 
 # --- Locate the NDK ---------------------------------------------------------
+# Precedence: explicit ANDROID_NDK_HOME/ANDROID_NDK_ROOT > ANDROID_NDK_VERSION
+# under $ANDROID_HOME/ndk > newest NDK found. The build pins ndkVersion in
+# app/build.gradle.kts, so callers (e.g. CI, where several NDKs are preinstalled)
+# should pass ANDROID_NDK_HOME to guarantee we match it.
 NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 if [ -z "$NDK" ]; then
   SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
   [ -n "$SDK" ] || { echo "Neither ANDROID_NDK_HOME nor ANDROID_HOME is set." >&2; exit 1; }
-  NDK="$(find "$SDK/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)"
+  if [ -n "${ANDROID_NDK_VERSION:-}" ]; then
+    NDK="$SDK/ndk/$ANDROID_NDK_VERSION"
+  else
+    NDK="$(find "$SDK/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)"
+  fi
 fi
-[ -n "$NDK" ] && [ -d "$NDK" ] || { echo "Could not locate an Android NDK." >&2; exit 1; }
+[ -n "$NDK" ] && [ -d "$NDK" ] || { echo "Could not locate an Android NDK (tried '$NDK')." >&2; exit 1; }
 
 case "$(uname -s)" in
   Linux) HOST_TAG="linux-x86_64" ;;
