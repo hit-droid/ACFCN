@@ -57,12 +57,6 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
-            // GPU offload is opt-in. Enable with -Pacfcn.opencl=true after
-            // staging OpenCL headers + libOpenCL.so via
-            // scripts/setup-opencl-ndk.sh (see .github/workflows/ci.yml).
-            val openclEnabled = providers.gradleProperty("acfcn.opencl").orNull == "true" ||
-                System.getenv("ACFCN_OPENCL") == "true"
-            arguments.add("-DACFCN_ENABLE_OPENCL=${if (openclEnabled) "ON" else "OFF"}")
         }
     }
     packaging {

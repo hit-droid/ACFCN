@@ -18,11 +18,19 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 # OpenCL backend for Adreno GPU offload. Off by default: the backend needs
 # OpenCL headers + an ICD loader staged in the NDK sysroot (CI wires this up,
-# see .github/workflows/*.yml). Without that setup the flag stays OFF and the
-# engine is CPU-only, exactly as before.
+# see .github/workflows/*.yml via scripts/setup-opencl-ndk.sh). Without that
+# setup the flag stays OFF and the engine is CPU-only, exactly as before.
+#
+# Enable with the ACFCN_OPENCL=true environment variable, e.g.:
+#   ACFCN_OPENCL=true ./gradlew :app:assembleDebug
+# (AGP passes env vars through to the CMake invocation.)
 option(ACFCN_ENABLE_OPENCL "Enable the OpenCL (Adreno GPU) backend" OFF)
+if(DEFINED ENV{ACFCN_OPENCL} AND NOT "$ENV{ACFCN_OPENCL}" STREQUAL "")
+    set(ACFCN_ENABLE_OPENCL "$ENV{ACFCN_OPENCL}" CACHE BOOL "Enable the OpenCL (Adreno GPU) backend" FORCE)
+endif()
 
 if(ACFCN_ENABLE_OPENCL)
+    message(STATUS "ACFCN: OpenCL (Adreno GPU) backend enabled")
     set(GGML_OPENCL ON CACHE BOOL "" FORCE)
     # Qualcomm's Adreno-optimized matmul kernels ship in the backend and are the
     # whole reason this path is faster than the generic CPU/SIMD kernels.
