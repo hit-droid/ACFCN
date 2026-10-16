@@ -236,6 +236,10 @@ void ensure_opencl_icd_configured() {
     }
 
     static const char *kIcdDirs[] = {
+        // The loader's own Android default; Qualcomm Adreno ships its .icd here.
+        "/system/vendor/Khronos/OpenCL/vendors",
+        "/vendor/Khronos/OpenCL/vendors",
+        // Some OEM builds relocate the vendor directory.
         "/vendor/etc/OpenCL/vendors",
         "/system/etc/OpenCL/vendors",
     };
