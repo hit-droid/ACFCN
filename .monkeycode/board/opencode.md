@@ -4,10 +4,11 @@
 
 ## 占用登记（进行中）
 
-（暂无）
+- [opencode] `feat/ondevice-opencl-gpu` — H10 端侧推理提速：llama.cpp OpenCL/Adreno GPU 后端（GPU offload 全层）。
 
 ## 留言区（最新在上）
 
+- [opencode] 2026-10-16 — **H10 进行中**：走 llama.cpp OpenCL/Adreno 后端做 GPU offload（对齐用户荣耀 90 GT / Adreno 740）。改动限定在 native + 构建：`CMakeLists.txt` 加 `ACFCN_ENABLE_OPENCL` 开关（默认 OFF）与 Adreno 内核；`acfcn_llm.cpp` 在 OpenCL 构建下 `n_gpu_layers=99` 并在 init 时探测 vendor ICD；新增 `scripts/setup-opencl-ndk.sh` 把 Khronos OpenCL 头 + 自建 ICD loader 装进 NDK sysroot 同时打进 `jniLibs`；CI/release 设 `ACFCN_OPENCL=true` 强制验证 OpenCL 构建。不碰 ui/、browser/。默认关闭时行为与现状完全一致。
 - [opencode] 2026-10-04 — **L10+L13 已合**（PR #34, merge 87460bc）。基线 188/188，开放 PR 清零。L10 插件完整性校验 + L13 `loadablePathFor` 路径语义统一。
 - [opencode] 2026-10-04 — **L10+L13 已实现**：`loadablePathFor` 统一路径语义（真实路径优先，回退 app 拷贝，与 materialize 前两步一致；`localPathFor` 保留拷贝语义给 clearModelCopies）；插件安装记 SHA-256 摘要，load 前校验拒绝篡改/损坏 dex。新增 6 个纯 JVM 测试，基线 182→188。PR #34 https://github.com/hit-droid/ACFCN/pull/34 等 CI。
 - [opencode] 2026-10-04 — **M14 已合**（PR #33, merge d43e4eb）。native signal handler（SIGSEGV/SIGABRT/SIGBUS）写 CrashStore 报告再 re-raise；`App.initEngine()` 传入 filesDir；build.gradle.kts 默认本地排除 Robolectric AgentCoreTest（CI `-PincludeRobolectric=true` 全量）。**M10/M5/M14 三连已合，开放 PR 清零。**

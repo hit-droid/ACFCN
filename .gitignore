@@ -30,3 +30,6 @@ Thumbs.db
 # Sandbox artifacts
 app-debug.apk
 SelfModAgent-debug.apk
+
+# Generated OpenCL ICD loader (built by scripts/setup-opencl-ndk.sh)
+app/src/main/jniLibs/
