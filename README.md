@@ -6,7 +6,7 @@ ACFCN 是一个运行在 Android 上的**自进化智能体**应用：它能编�
 
 - **智能体 Tab**：思考-行动-观察循环；流式输出；停止 / 重试；会话自动持久化；Markdown 渲染（代码块可复制）。
 - **浏览器 Tab**：常驻 WebView，用户与智能体共用；按编号元素操作（snapshot/click/type/extract）；智能体点击时页面高亮标记；历史记录、返回键处理。
-- **离线 Tab**：**端侧推理**（内置 llama.cpp JNI，arm64，CPU，mmap）；导入 GGUF；按机型下调 ctx/batch；诊断日志。
+- **离线 Tab**：**端侧推理**（内置 llama.cpp JNI，arm64，mmap；Adreno GPU 加速，见下）；导入 GGUF；按机型下调 ctx/batch；诊断日志。
 - **脚本 Tab**：沙箱内执行 JavaScript（Rhino），持久化脚本 + 自动版本回滚。
 - **插件 Tab**：运行时通过 DexClassLoader 加载 `.dex` 插件。
 - **API Tab**：云端 / 本机预设一键接入，测试连接、列出模型、配置档案；**API Key 使用系统密钥库加密存储**；存储空间查看与清理。
@@ -20,6 +20,22 @@ ACFCN 是一个运行在 Android 上的**自进化智能体**应用：它能编�
 4. 加载完成后即可对话，全程不联网。
 
 > 端侧仅支持 arm64-v8a。模型越大越吃内存：2B 需约 3GB 空闲内存。
+
+### GPU 加速（OpenCL / Adreno）
+
+Release 包内置 llama.cpp 的 OpenCL 后端，会把全部层 offload 到 Adreno GPU（Adreno 740 及更新的芯片）。日志出现 `n_gpu_layers=99` 与 `OpenCL: using ICD ...` 即表示已走 GPU；GPU 初始化失败会自动回退 CPU，不影响使用。
+
+本地从源码构建时，如需自行验证 OpenCL 路径：
+
+```bash
+# 把 OpenCL 头 + 自建 ICD loader 装进 NDK（版本需与 build.gradle.kts 的 ndkVersion 一致）
+./scripts/setup-opencl-ndk.sh arm64-v8a
+
+# 开启 OpenCL 构建
+ACFCN_OPENCL=true ./gradlew :app:assembleDebug
+```
+
+不设置 `ACFCN_OPENCL` 时构建为纯 CPU（默认行为），与旧版本完全一致。
 
 ## 离线使用（本机服务）
 
