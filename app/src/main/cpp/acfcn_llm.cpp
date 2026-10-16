@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <cstring>
+#include <cstdlib>
 #include <chrono>
 #include <algorithm>
 #include <csignal>
@@ -211,6 +212,60 @@ void install_signal_handlers() {
 
 } // namespace
 
+#ifdef ACFCN_USE_OPENCL
+namespace {
+
+bool path_exists(const char *path) {
+    struct stat st;
+    return path != nullptr && stat(path, &st) == 0;
+}
+
+// Android exposes no public libOpenCL.so, so the app ships the Khronos ICD
+// loader (see scripts/setup-opencl-ndk.sh). That loader has no built-in
+// knowledge of Qualcomm's driver, so on first use point it at the vendor
+// implementation unless the caller already set an ICD override. We only read
+// paths and set an env var here; actual device bring-up is logged so a real-device
+// run can confirm which driver was picked.
+void ensure_opencl_icd_configured() {
+    const char *filenames = getenv("OCL_ICD_FILENAMES");
+    const char *vendors = getenv("OCL_ICD_VENDORS");
+    if (filenames != nullptr || vendors != nullptr) {
+        LOGI("OpenCL: honoring existing ICD env (FILENAMES=%s VENDORS=%s)",
+             filenames ? filenames : "-", vendors ? vendors : "-");
+        return;
+    }
+
+    static const char *kIcdDirs[] = {
+        "/vendor/etc/OpenCL/vendors",
+        "/system/etc/OpenCL/vendors",
+    };
+    for (const char *dir : kIcdDirs) {
+        if (path_exists(dir)) {
+            setenv("OCL_ICD_VENDORS", dir, 0);
+            LOGI("OpenCL: using ICD vendors dir %s", dir);
+            return;
+        }
+    }
+
+    static const char *kDriverLibs[] = {
+        "/vendor/lib64/libOpenCL.so",
+        "/vendor/lib64/libOpenCL_adreno.so",
+        "/vendor/lib64/libOpenCL_adreno_driver.so",
+    };
+    for (const char *lib : kDriverLibs) {
+        if (path_exists(lib)) {
+            setenv("OCL_ICD_FILENAMES", lib, 0);
+            LOGI("OpenCL: using ICD driver %s", lib);
+            return;
+        }
+    }
+
+    LOGI("OpenCL: no vendor ICD found; bundled loader will use its defaults");
+}
+
+} // namespace
+#endif
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         JNIEnv *env, jobject /*thiz*/, jstring modelPath, jint nCtx, jint nThreads,
@@ -220,10 +275,20 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     g_engine.abort_flag.store(false);
     free_locked();
 
+#ifdef ACFCN_USE_OPENCL
+    ensure_opencl_icd_configured();
+#endif
     llama_backend_init();
 
     llama_model_params mparams = llama_model_default_params();
+#ifdef ACFCN_USE_OPENCL
+    // Offload every layer to the Adreno GPU (OpenCL backend). This is the main
+    // reason the OpenCL build is much faster than pure CPU: the Adreno-optimized
+    // matmul kernels run the whole model on the GPU.
+    mparams.n_gpu_layers = 99;
+#else
     mparams.n_gpu_layers = 0; // CPU only; keeps it portable across all arm64 phones
+#endif
 
     // mmap: map the weights instead of reading them fully into RAM. This is the
     // single biggest win for load time and memory (matches what MNN does).
@@ -245,7 +310,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     }
 
     const std::string path = jstr(env, modelPath);
-    LOGI("loading model (mmap): %s", path.c_str());
+    LOGI("loading model (mmap): %s (n_gpu_layers=%d)", path.c_str(), (int) mparams.n_gpu_layers);
     g_engine.model = llama_model_load_from_file(path.c_str(), mparams);
 
     // Release the progress ref; no longer needed after load.
