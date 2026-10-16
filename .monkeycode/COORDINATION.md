@@ -55,7 +55,7 @@
 - [x] H7 浏览器 `click/type` 索引防漂移 — **已修复**（PR #2, merge 43dc398）
 - [x] H8 崩溃存档静默丢失 — **已修复**（PR #6, merge c6e9297）
 - [x] H9 Android 16 卡顿/ANR — **已修复**（PR #21, merge 146f69c）
-- [@opencode] feat/ondevice-opencl-gpu H10 端侧推理 tokens/s 本体（OpenCL/Adreno GPU offload 优先；线程策略、KV 复用、批量 prefill 待真机 profile）
+- [@opencode] 260416-chore-h10-merge-note H10 端侧推理 tokens/s 本体 — **OpenCL/Adreno GPU offload 能力已合**（PR #35, merge 37a54ae；默认 OFF）；剩余：真机基线对比（CPU vs OpenCL）、线程大核策略、KV 复用、批量 prefill
 
 ### 中严重度
 - [x] M1 `nativeGenerate()` 死代码 — **已删除**（`chore/remove-native-generate`；Kotlin `generate()` 无调用者，连同 JNI export 一并移除）
