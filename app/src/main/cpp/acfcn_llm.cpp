@@ -38,9 +38,35 @@ static int llama_log_level_to_android(enum ggml_log_level level) {
     }
 }
 
+// Summary of the last model load: build GPU-offload support, requested GPU
+// layers, CPU features (confirms the dotprod build) and the captured OpenCL /
+// layer-placement log lines.
+static std::mutex g_gpu_log_mu;
+static std::string g_gpu_log;
+static std::string g_load_info;
+
 static void llama_log_to_logcat(enum ggml_log_level level, const char *text, void * /*user_data*/) {
     if (text == nullptr) return;
     __android_log_write(llama_log_level_to_android(level), LOG_TAG, text);
+
+    // Keep the load-time lines that reveal whether the OpenCL backend came up
+    // and how many layers actually landed on the GPU. Shown in the in-app
+    // diagnostics so a device can be profiled without adb logcat.
+    static const char *keys[] = {
+        "offload", "OpenCL", "opencl", "ggml_opencl", "backend", "device",
+        "model buffer size", "failed", "not supported", "no usable",
+    };
+    bool keep = false;
+    for (const char *k : keys) {
+        if (strstr(text, k) != nullptr) { keep = true; break; }
+    }
+    if (keep) {
+        std::lock_guard<std::mutex> lk(g_gpu_log_mu);
+        if (g_gpu_log.size() < 6000) {
+            g_gpu_log += text;
+            if (g_gpu_log.empty() || g_gpu_log.back() != '\n') g_gpu_log += '\n';
+        }
+    }
 }
 
 // Runtime tuning without rebuilding, read once at model load:
@@ -319,7 +345,9 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     ensure_opencl_icd_configured();
 #endif
     llama_backend_init();
+    { std::lock_guard<std::mutex> lk(g_gpu_log_mu); g_gpu_log.clear(); g_load_info.clear(); }
 
+    int gpu_layers = 0;
     llama_model_params mparams = llama_model_default_params();
 #ifdef ACFCN_USE_OPENCL
     // Use the GPU when it works and fall back to CPU automatically. llama.cpp
@@ -329,7 +357,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     // ARM CPU path. Override per run with
     //   adb shell setprop debug.acfcn.gpu_layers 0    # force CPU
     //   adb shell setprop debug.acfcn.gpu_layers 99   # force GPU
-    int gpu_layers = get_property_int("debug.acfcn.gpu_layers", 99);
+    gpu_layers = get_property_int("debug.acfcn.gpu_layers", 99);
     if (gpu_layers < 0) gpu_layers = 0;
     mparams.n_gpu_layers = gpu_layers;
     g_engine.gpu_layers.store(gpu_layers);
@@ -401,6 +429,21 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     llama_set_abort_callback(g_engine.ctx, abort_trampoline, &g_engine);
     g_engine.n_ctx.store(nCtx);
     g_engine.n_batch = batch;
+
+    // Build the load summary surfaced to Kotlin for the in-app diagnostics:
+    // whether the build can offload, how many layers were requested, the CPU
+    // feature set (confirms the dotprod build) and the captured OpenCL /
+    // layer-placement lines from llama.cpp.
+    {
+        char desc[512] = {0};
+        llama_model_desc(g_engine.model, desc, sizeof(desc));
+        std::lock_guard<std::mutex> lk(g_gpu_log_mu);
+        g_load_info = std::string("model=") + desc
+                    + " gpu_offload_build=" + (llama_supports_gpu_offload() ? "yes" : "no")
+                    + " requested_gpu_layers=" + std::to_string(gpu_layers)
+                    + "\n" + llama_print_system_info() + "\n" + g_gpu_log;
+    }
+
     g_engine.ready.store(true);
     LOGI("engine ready, n_ctx=%d", nCtx);
     return JNI_TRUE;
@@ -714,4 +757,13 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeLastGpuLayers(
         JNIEnv * /*env*/, jobject /*thiz*/) {
     return g_engine.gpu_layers.load();
+}
+
+// Human-readable summary of the last model load (build GPU support, requested
+// layers, CPU features, OpenCL/placement log lines) for the in-app diagnostics.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeLoadInfo(
+        JNIEnv *env, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> lk(g_gpu_log_mu);
+    return env->NewStringUTF(g_load_info.c_str());
 }

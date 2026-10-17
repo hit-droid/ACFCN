@@ -75,6 +75,14 @@ class LocalLlmEngine {
                 "engine",
                 "load 返回 $ok（GPU 层数 $gpu），耗时 ${System.currentTimeMillis() - t0}ms",
             )
+            if (ok) {
+                runCatching { nativeLoadInfo() }
+                    .getOrDefault("")
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .forEach { com.selfmod.agent.util.Diagnostics.log("gpu", it) }
+            }
             return ok
         } finally {
             lifecycle.endLoad(token, ok, attempted)
@@ -196,6 +204,7 @@ class LocalLlmEngine {
     private external fun nativeChatTemplate(): String
     private external fun nativeContextSize(): Int
     private external fun nativeLastGpuLayers(): Int
+    private external fun nativeLoadInfo(): String
 
     companion object {
         @Volatile
