@@ -64,25 +64,28 @@ import com.selfmod.agent.ui.theme.WallpaperTeal
  * appears to float above the wallpaper.
  */
 fun Modifier.glass(
-    shape: Shape = RoundedCornerShape(22.dp),
+    shape: Shape = RoundedCornerShape(24.dp),
     tint: Color = GlassTint,
     border: Color = GlassBorder,
-    elevation: Dp = 14.dp,
+    elevation: Dp = 16.dp,
 ): Modifier = this
     .shadow(elevation, shape, clip = false, ambientColor = GlassShadow, spotColor = GlassShadow)
     .clip(shape)
     .background(
         Brush.verticalGradient(
-            listOf(
-                tint.copy(alpha = (tint.alpha * 1.6f).coerceAtMost(1f)),
-                tint.copy(alpha = (tint.alpha * 0.7f).coerceAtMost(1f)),
-            ),
+            0.00f to Color.White.copy(alpha = 0.20f),
+            0.12f to tint.copy(alpha = (tint.alpha * 2.2f).coerceAtMost(0.34f)),
+            0.55f to tint.copy(alpha = (tint.alpha * 1.1f).coerceAtMost(0.22f)),
+            1.00f to tint.copy(alpha = (tint.alpha * 0.7f).coerceAtMost(0.16f)),
         ),
     )
     .border(
         1.dp,
         Brush.verticalGradient(
-            listOf(GlassHighlight.copy(alpha = 0.55f), border, border.copy(alpha = 0.35f)),
+            0.00f to Color.White.copy(alpha = 0.66f),
+            0.22f to GlassHighlight.copy(alpha = 0.34f),
+            0.62f to border,
+            1.00f to border.copy(alpha = 0.18f),
         ),
         shape,
     )
@@ -112,7 +115,11 @@ fun GlassBackground(modifier: Modifier = Modifier) {
     Canvas(
         modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color(0xFF080A12), Color(0xFF020207)))),
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF141B3D), Color(0xFF160B2B), Color(0xFF05060E)),
+                ),
+            ),
     ) {
         val w = size.width
         val h = size.height
@@ -122,7 +129,7 @@ fun GlassBackground(modifier: Modifier = Modifier) {
                 brush = Brush.radialGradient(
                     colors = listOf(
                         color.copy(alpha = alpha),
-                        color.copy(alpha = alpha * 0.35f),
+                        color.copy(alpha = alpha * 0.42f),
                         Color.Transparent,
                     ),
                     center = center,
@@ -132,10 +139,23 @@ fun GlassBackground(modifier: Modifier = Modifier) {
                 center = center,
             )
         }
-        blob(WallpaperBlue, w * 0.16f, h * 0.10f, w * 0.78f, 0.46f)
-        blob(WallpaperPurple, w * 0.94f, h * 0.20f, w * 0.72f, 0.40f)
-        blob(WallpaperPink, w * 0.72f, h * 0.70f, w * 0.82f, 0.32f)
-        blob(WallpaperTeal, w * 0.10f, h * 0.62f, w * 0.72f, 0.28f)
+        // Big saturated washes: the glass panels need bright colour behind them
+        // for the translucency and specular edge to read as "liquid glass".
+        blob(WallpaperBlue, w * 0.14f, h * 0.08f, w * 0.92f, 0.80f)
+        blob(WallpaperPurple, w * 1.02f, h * 0.19f, w * 0.86f, 0.72f)
+        blob(WallpaperPink, w * 0.80f, h * 0.58f, w * 0.90f, 0.58f)
+        blob(WallpaperTeal, w * 0.04f, h * 0.52f, w * 0.82f, 0.52f)
+        blob(WallpaperPurple, w * 0.46f, h * 0.94f, w * 0.96f, 0.56f)
+        // Soft top light so the very top of the screen catches a glare.
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(Color.White.copy(alpha = 0.10f), Color.Transparent),
+                center = Offset(w * 0.5f, -h * 0.05f),
+                radius = w * 1.1f,
+            ),
+            radius = w * 1.1f,
+            center = Offset(w * 0.5f, -h * 0.05f),
+        )
     }
 }
 

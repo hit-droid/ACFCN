@@ -7,13 +7,16 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -51,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -212,12 +216,21 @@ private fun ChatMessageRow(e: TraceEntry) {
 @Composable
 private fun UserBubble(text: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        val shape = RoundedCornerShape(24.dp, 24.dp, 8.dp, 24.dp)
         Box(
             Modifier
                 .widthIn(max = 300.dp)
-                .clip(RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF3AA0FF), AccentBlue)))
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .shadow(
+                    12.dp,
+                    shape,
+                    clip = false,
+                    ambientColor = AccentBlue.copy(alpha = 0.5f),
+                    spotColor = AccentBlue.copy(alpha = 0.5f),
+                )
+                .clip(shape)
+                .background(Brush.linearGradient(listOf(Color(0xFF53B4FF), Color(0xFF0A6BFF))))
+                .border(1.dp, Color.White.copy(alpha = 0.30f), shape)
+                .padding(horizontal = 15.dp, vertical = 11.dp),
         ) {
             Text(text, color = Color.White, fontSize = 15.sp, lineHeight = 21.sp)
         }
@@ -235,9 +248,9 @@ private fun AssistantBubble(
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
         Box(
             Modifier
-                .widthIn(max = 320.dp)
-                .glass(RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), elevation = 10.dp)
-                .padding(14.dp),
+                .widthIn(max = 330.dp)
+                .glass(RoundedCornerShape(8.dp, 24.dp, 24.dp, 24.dp), elevation = 12.dp)
+                .padding(16.dp),
         ) {
             Column {
                 MarkdownText(if (text.isBlank() && streaming) "…" else text, baseColor = TextPrimary)
@@ -264,28 +277,47 @@ private fun AssistantBubble(
 @Composable
 private fun TraceRow(title: String, body: String, color: Color, icon: String) {
     var expanded by remember { mutableStateOf(false) }
-    Column(
+    Row(
         Modifier
             .fillMaxWidth()
-            .glass(RoundedCornerShape(12.dp), elevation = 6.dp)
+            .clip(RoundedCornerShape(14.dp))
             .clickable { expanded = !expanded }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(vertical = 7.dp, horizontal = 6.dp)
+            .height(IntrinsicSize.Min),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(icon, fontSize = 12.sp)
-            Spacer(Modifier.width(8.dp))
-            Text(title, color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-            Text(if (expanded) "收起" else "展开", color = TextSecondary, fontSize = 11.sp)
-        }
-        val preview = body.replace("\n", " ").take(80)
-        Text(
-            if (expanded) body else preview,
-            color = TextSecondary,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            maxLines = if (expanded) Int.MAX_VALUE else 1,
-            modifier = Modifier.padding(top = 4.dp),
+        // Slim coloured rail instead of a full card: keeps the trace readable
+        // without stacking another rounded panel into the conversation.
+        Box(
+            Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(2.dp))
+                .background(color.copy(alpha = 0.75f)),
         )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(icon, fontSize = 12.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    title,
+                    color = color,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(if (expanded) "收起" else "展开", color = TextSecondary, fontSize = 11.sp)
+            }
+            val preview = body.replace("\n", " ").take(80)
+            Text(
+                if (expanded) body else preview,
+                color = TextSecondary,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
     }
 }
 
@@ -294,7 +326,7 @@ private fun TypingIndicator() {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
         Row(
             Modifier
-                .glass(RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), elevation = 8.dp)
+                .glass(RoundedCornerShape(8.dp, 24.dp, 24.dp, 24.dp), elevation = 10.dp)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -334,7 +366,7 @@ private fun ChatInputBar(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 8.dp)
-            .glass(RoundedCornerShape(26.dp), elevation = 12.dp)
+            .glass(RoundedCornerShape(28.dp), elevation = 16.dp)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
