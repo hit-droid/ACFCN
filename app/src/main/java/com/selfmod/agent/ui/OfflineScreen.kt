@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -47,8 +46,6 @@ import com.selfmod.agent.ui.theme.Danger
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
-import com.selfmod.agent.ui.glass.GlassHeader
-import com.selfmod.agent.ui.glass.glass
 
 @Composable
 fun OfflineScreen(vm: AgentViewModel) {
@@ -81,13 +78,19 @@ fun OfflineScreen(vm: AgentViewModel) {
     }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().padding(16.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        GlassHeader(
-            "离线智能体",
-            "导入本机 GGUF / ONNX 权重，配合 Ollama、llama.cpp 或 LM Studio 的 OpenAI 兼容接口即可完全离线调用工具。\n" +
-                "用法：1) 用 Ollama `ollama create` 或 llama.cpp `-m` 加载导入的 GGUF；2) 扫描并接入本机端口；3) 打开离线模式。",
+        Text("离线智能体", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
+        Text(
+            "导入本机 GGUF / ONNX 权重，配合 Ollama、llama.cpp 或 LM Studio 的 OpenAI 兼容接口即可完全离线调用工具。",
+            color = TextSecondary,
+            fontSize = 13.sp,
+        )
+        Text(
+            "用法：1) 用 Ollama `ollama create` 或 llama.cpp `-m` 加载导入的 GGUF；2) 扫描并接入本机端口；3) 打开离线模式。",
+            color = TextSecondary,
+            fontSize = 12.sp,
         )
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -99,7 +102,7 @@ fun OfflineScreen(vm: AgentViewModel) {
         }
 
         Column(
-            Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp),
+            Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(10.dp)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text("当前端点", color = AccentBlue, fontSize = 13.sp)
@@ -124,7 +127,7 @@ fun OfflineScreen(vm: AgentViewModel) {
         }
         probe.forEach { hit ->
             Row(
-                Modifier.fillMaxWidth().glass(RoundedCornerShape(16.dp), elevation = 6.dp).padding(10.dp),
+                Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -160,7 +163,7 @@ fun OfflineScreen(vm: AgentViewModel) {
         )
         RecommendedModels.ALL.forEach { rec ->
             Column(
-                Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp),
+                Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -209,7 +212,7 @@ fun OfflineScreen(vm: AgentViewModel) {
         }
         if (selfTest.isNotBlank()) {
             Column(
-                Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp),
+                Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
             ) {
                 Text("端侧自检结果", color = AccentBlue, fontSize = 12.sp)
                 Spacer(Modifier.height(4.dp))
@@ -225,7 +228,7 @@ fun OfflineScreen(vm: AgentViewModel) {
         }
         if (diagnostics.isNotBlank() && diagnostics != "（暂无日志）") {
             Column(
-                Modifier.fillMaxWidth().height(180.dp).glass(RoundedCornerShape(18.dp), elevation = 6.dp)
+                Modifier.fillMaxWidth().height(180.dp).background(SurfaceVariant, RoundedCornerShape(8.dp))
                     .verticalScroll(rememberScrollState()).padding(10.dp),
             ) {
                 Text(diagnostics, color = TextPrimary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
@@ -248,7 +251,7 @@ fun OfflineScreen(vm: AgentViewModel) {
         } else {
             models.forEach { m: LocalModel ->
                 Column(
-                    Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp),
+                    Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(m.name, color = TextPrimary, fontSize = 14.sp)
