@@ -3,7 +3,9 @@ package com.selfmod.agent.offline.native
 import java.io.File
 
 /**
- * On-device GGUF inference via llama.cpp (JNI). CPU only, arm64-v8a.
+ * On-device GGUF inference via llama.cpp (JNI). arm64-v8a; the Adreno OpenCL
+ * backend is used when available and falls back to the optimized CPU path
+ * automatically.
  *
  * Load a model once, then [generate] / [chat] stream decoded pieces through
  * [onToken]; return false from [onToken] to cancel generation.
@@ -68,9 +70,10 @@ class LocalLlmEngine {
             val t0 = System.currentTimeMillis()
             attempted = true
             ok = nativeInit(modelFile.absolutePath, nCtx, threads, nBatch, onProgress)
+            val gpu = if (ok) runCatching { nativeLastGpuLayers() }.getOrDefault(0) else 0
             com.selfmod.agent.util.Diagnostics.log(
                 "engine",
-                "load 返回 $ok，耗时 ${System.currentTimeMillis() - t0}ms",
+                "load 返回 $ok（GPU 层数 $gpu），耗时 ${System.currentTimeMillis() - t0}ms",
             )
             return ok
         } finally {
@@ -128,13 +131,18 @@ class LocalLlmEngine {
         val first = java.util.concurrent.atomic.AtomicBoolean(true)
         val lastTokenAt = java.util.concurrent.atomic.AtomicLong(t0)
         val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val emitted = java.util.concurrent.atomic.AtomicInteger(0)
+        val firstTokenAt = java.util.concurrent.atomic.AtomicLong(0L)
         val wrapped = object : TokenCallback {
             override fun onToken(piece: String): Boolean {
                 if (aborted.get()) return false
                 lastTokenAt.set(System.currentTimeMillis())
+                emitted.incrementAndGet()
                 if (first.compareAndSet(true, false)) {
+                    val now = System.currentTimeMillis()
+                    firstTokenAt.set(now)
                     com.selfmod.agent.util.Diagnostics.log(
-                        "engine", "chat: 首 token 耗时 ${System.currentTimeMillis() - t0}ms",
+                        "engine", "chat: 首 token 耗时 ${now - t0}ms",
                     )
                 }
                 return onToken?.onToken(piece) ?: true
@@ -143,8 +151,18 @@ class LocalLlmEngine {
         val code = IdleWatchdog.run(timeoutMs, lastTokenAt, aborted, { nativeCancel() }) {
             nativeChat(tmpl, useRoles, useContents, maxTokens, temperature, topK, topP, wrapped)
         }
+        val totalMs = System.currentTimeMillis() - t0
+        val n = emitted.get()
+        val decodeMs = (System.currentTimeMillis() - firstTokenAt.get()).coerceAtLeast(1L)
+        val tps = if (n > 0 && firstTokenAt.get() > 0) {
+            val afterFirst = (n - 1).coerceAtLeast(0)
+            "%.2f".format(afterFirst * 1000.0 / decodeMs)
+        } else {
+            "0.00"
+        }
         com.selfmod.agent.util.Diagnostics.log(
-            "engine", "chat: 返回 $code，总耗时 ${System.currentTimeMillis() - t0}ms",
+            "engine",
+            "chat: 返回 $code，总耗时 ${totalMs}ms，输出 $n tokens，解码 $tps tok/s",
         )
         return code
     }
@@ -177,6 +195,7 @@ class LocalLlmEngine {
     ): Int
     private external fun nativeChatTemplate(): String
     private external fun nativeContextSize(): Int
+    private external fun nativeLastGpuLayers(): Int
 
     companion object {
         @Volatile
