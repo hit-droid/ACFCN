@@ -16,6 +16,14 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:requestLegacyExternalStorage="false">
 
+        <!-- Android 13+ blocks dlopen of non-public native libraries. The
+             bundled Khronos ICD loader reaches the Adreno driver through these
+             vendor libs, so they must be declared to get out of the app's
+             linker namespace restrictions. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL_adreno.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL_adreno_driver.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

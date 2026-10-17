@@ -329,6 +329,32 @@ void ensure_opencl_icd_configured() {
     LOGI("OpenCL: no vendor ICD found; bundled loader will use its defaults");
 }
 
+// Enumerate the backends/devices the ggml registry actually sees at runtime.
+// This is the ground truth for GPU offload: if OpenCL was compiled in but the
+// driver could not be reached, it shows up as either a missing "OpenCL" entry
+// or an entry with zero devices, instead of us guessing from layer placement.
+std::string describe_backends() {
+    std::string out;
+    const size_t n = ggml_backend_reg_count();
+    out += "backends=" + std::to_string(n);
+    for (size_t i = 0; i < n; ++i) {
+        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+        if (reg == nullptr) continue;
+        const char *rname = ggml_backend_reg_name(reg);
+        const size_t devs = ggml_backend_reg_dev_count(reg);
+        out += "\n  [" + std::to_string(i) + "] " + (rname ? rname : "?")
+             + " devs=" + std::to_string(devs);
+        for (size_t j = 0; j < devs; ++j) {
+            ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, j);
+            if (dev == nullptr) continue;
+            const char *dname = ggml_backend_dev_name(dev);
+            out += "\n      - " + std::string(dname ? dname : "?")
+                 + " type=" + std::to_string((int) ggml_backend_dev_type(dev));
+        }
+    }
+    return out;
+}
+
 } // namespace
 #endif
 
@@ -438,10 +464,19 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         char desc[512] = {0};
         llama_model_desc(g_engine.model, desc, sizeof(desc));
         std::lock_guard<std::mutex> lk(g_gpu_log_mu);
-        g_load_info = std::string("model=") + desc
+        std::string info = std::string("model=") + desc
                     + " gpu_offload_build=" + (llama_supports_gpu_offload() ? "yes" : "no")
                     + " requested_gpu_layers=" + std::to_string(gpu_layers)
-                    + "\n" + llama_print_system_info() + "\n" + g_gpu_log;
+                    + "\n" + llama_print_system_info();
+#ifdef ACFCN_USE_OPENCL
+        const char *icd_v = getenv("OCL_ICD_VENDORS");
+        const char *icd_f = getenv("OCL_ICD_FILENAMES");
+        info += "\n" + describe_backends();
+        info += "\nicd_vendors=" + std::string(icd_v ? icd_v : "-");
+        info += " icd_filenames=" + std::string(icd_f ? icd_f : "-");
+#endif
+        info += "\n" + g_gpu_log;
+        g_load_info = info;
     }
 
     g_engine.ready.store(true);
