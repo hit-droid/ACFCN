@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +43,8 @@ import com.selfmod.agent.ui.theme.Danger
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import com.selfmod.agent.ui.glass.GlassHeader
+import com.selfmod.agent.ui.glass.glass
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -78,14 +81,12 @@ fun ConfigScreen(vm: AgentViewModel) {
     )
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("API 快速接入", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
-        Text(
+        GlassHeader(
+            "API 快速接入",
             "点预设填好 Base URL 和模型，粘贴 Key，一键测试。本机 Ollama / LM Studio / llama.cpp 不需要 Key。",
-            color = TextSecondary,
-            fontSize = 13.sp,
         )
 
         Text("云端", color = TextSecondary, fontSize = 12.sp)
@@ -243,7 +244,7 @@ fun ConfigScreen(vm: AgentViewModel) {
         } else {
             profiles.forEach { p ->
                 Column(
-                    Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
+                    Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -298,7 +299,7 @@ fun ConfigScreen(vm: AgentViewModel) {
         val total = remember(tick, storageTick) { vm.storageTotal() }
         val free = remember(tick, storageTick) { vm.storageFree() }
         Column(
-            Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
+            Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Row(Modifier.fillMaxWidth()) {

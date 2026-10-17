@@ -12,11 +12,11 @@ android {
         applicationId = "com.selfmod.agent"
         minSdk = 26
         targetSdk = 34
-        // Keep in sync with release tags: tag v2.13 -> versionName "2.13",
+        // Keep in sync with release tags: tag v2.14 -> versionName "2.14",
         // versionCode bumps by 1 every release (older installs can only
         // upgrade across a strictly higher versionCode).
-        versionCode = 8
-        versionName = "2.13"
+        versionCode = 9
+        versionName = "2.14"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += listOf("arm64-v8a")

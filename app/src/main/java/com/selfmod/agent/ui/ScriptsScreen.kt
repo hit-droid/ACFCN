@@ -1,6 +1,7 @@
 package com.selfmod.agent.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -42,6 +44,7 @@ import com.selfmod.agent.ui.theme.Danger
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import com.selfmod.agent.ui.glass.glass
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
 
@@ -62,7 +65,7 @@ fun ScriptsScreen(vm: AgentViewModel) {
     }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("脚本编辑器", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
@@ -139,8 +142,8 @@ fun ScriptsScreen(vm: AgentViewModel) {
         }
 
         output?.let { o ->
-            Surface(color = SurfaceVariant, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
+            Box(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp)) {
+                Column(Modifier.fillMaxWidth()) {
                     Text("输出", color = AccentBlue, fontSize = 13.sp)
                     Spacer(Modifier.height(4.dp))
                     o.value?.let { Text("值: $it", color = AccentGreen, fontSize = 13.sp, fontFamily = FontFamily.Monospace) }

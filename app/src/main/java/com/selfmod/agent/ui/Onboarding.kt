@@ -18,6 +18,7 @@ import com.selfmod.agent.ui.theme.AccentBlue
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import com.selfmod.agent.ui.glass.glass
 
 @Composable
 fun OnboardingCard(
@@ -29,7 +30,7 @@ fun OnboardingCard(
         Modifier
             .fillMaxWidth()
             .padding(12.dp)
-            .background(SurfaceVariant, RoundedCornerShape(12.dp))
+            .glass(RoundedCornerShape(22.dp), elevation = 14.dp)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
