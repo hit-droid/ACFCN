@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 #
-# Stage the Khronos OpenCL headers and a self-built OpenCL ICD loader so the
-# NDK can compile llama.cpp's OpenCL backend (GGML_OPENCL=ON).
+# Stage the Khronos OpenCL headers, a self-built OpenCL ICD loader (link-time
+# only) and a forwarding wrapper (runtime libOpenCL.so) so the NDK can compile
+# llama.cpp's OpenCL backend (GGML_OPENCL=ON) and the APK can actually reach
+# the device's vendor GPU driver.
 #
-# Android does not expose libOpenCL.so through the public NDK, so an app that
-# uses OpenCL must ship its own ICD loader inside the APK. This script:
+# Android does not expose libOpenCL.so through the public NDK. The shipped
+# runtime library is NOT the Khronos ICD loader: Adreno/Mali vendor drivers
+# are plain complete OpenCL implementations that do not export the loader's
+# ICD entry point (clIcdGetPlatformIDsKHR), so the loader sees 0 devices on
+# many phones. Instead app/src/main/cpp/opencl_wrapper.c dlopen()s the vendor
+# driver by absolute path and forwards the exact symbols libacfcn_llm.so
+# needs, with OPENCL_x.y version tags (opencl_wrapper.map) matching what
+# libacfcn was linked against. The Khronos loader is still placed in the NDK
+# sysroot so -lOpenCL resolves at link time. This script:
 #   1. installs the OpenCL headers into the NDK sysroot,
-#   2. builds libOpenCL.so for arm64-v8a (against the NDK toolchain),
-#   3. drops libOpenCL.so both into the NDK sysroot (so the linker resolves
-#      -lOpenCL) and into app/src/main/jniLibs/arm64-v8a (so AGP packs it).
+#   2. builds libOpenCL.so (ICD loader) for the target ABI,
+#   3. drops it into the NDK sysroot (linker resolves -lOpenCL),
+#   4. compiles opencl_wrapper.c into app/src/main/jniLibs/<abi>/libOpenCL.so
+#      (what AGP packs and what the linker loads at runtime).
 #
 # The app then reaches the device's Adreno driver through the standard ICD
 # mechanism (see OPENCL_VENDOR_PATH handling in acfcn_llm.cpp).
@@ -102,11 +112,34 @@ if [ "$ABI" = "armeabi-v7a" ]; then
 fi
 mkdir -p "$SYSROOT_LIB_DIR"
 cp "$BUILT_SO" "$SYSROOT_LIB_DIR/libOpenCL.so"
-echo "Installed libOpenCL.so -> $SYSROOT_LIB_DIR/libOpenCL.so"
+echo "Installed libOpenCL.so -> $SYSROOT_LIB_DIR/libOpenCL.so (link-time only)"
+
+# --- 4. Build the forwarding wrapper, shipped as the runtime libOpenCL.so ---
+# The Khronos ICD loader cannot see Adreno/Mali drivers (they do not export
+# the ICD entry point), so at runtime we pack opencl_wrapper.c instead: it
+# dlopen()s the vendor driver by absolute path and forwards the symbols
+# libacfcn_llm.so imports, version-tagged via opencl_wrapper.map to keep the
+# DT_NEEDED verneed check happy (llama.cpp links against OPENCL_x.y versions).
+CLANG="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${ANDROID_ABI_TRIPLE}${ANDROID_PLATFORM}-clang"
+if [ ! -x "$CLANG" ]; then
+  for c in "$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${ANDROID_ABI_TRIPLE}"*-clang; do
+    [ -x "$c" ] && CLANG="$c" && break
+  done
+fi
+[ -x "$CLANG" ] || { echo "Cannot find NDK clang for $ABI." >&2; exit 1; }
 
 JNI_LIBS_DIR="$REPO_ROOT/app/src/main/jniLibs/$ABI"
 mkdir -p "$JNI_LIBS_DIR"
-cp "$BUILT_SO" "$JNI_LIBS_DIR/libOpenCL.so"
-echo "Installed libOpenCL.so -> $JNI_LIBS_DIR/libOpenCL.so"
+"$CLANG" --target="${ANDROID_ABI_TRIPLE}${ANDROID_PLATFORM}" \
+  -gcc-toolchain "$NDK/toolchains/llvm/prebuilt/$HOST_TAG" \
+  --sysroot="$SYSROOT" \
+  -shared -fPIC -O2 -DNDEBUG \
+  -I "$SYSROOT/usr/include" \
+  -Wl,--version-script="$REPO_ROOT/app/src/main/cpp/opencl_wrapper.map" \
+  -Wl,-soname,libOpenCL.so \
+  -o "$JNI_LIBS_DIR/libOpenCL.so" \
+  "$REPO_ROOT/app/src/main/cpp/opencl_wrapper.c" \
+  -llog -ldl
+echo "Built OpenCL forwarding wrapper -> $JNI_LIBS_DIR/libOpenCL.so"
 
 echo "OpenCL NDK setup complete. Build with -Pacfcn.opencl=true."
