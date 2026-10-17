@@ -12,11 +12,11 @@ android {
         applicationId = "com.selfmod.agent"
         minSdk = 26
         targetSdk = 34
-        // Keep in sync with release tags: tag v2.12 -> versionName "2.12",
+        // Keep in sync with release tags: tag v2.13 -> versionName "2.13",
         // versionCode bumps by 1 every release (older installs can only
         // upgrade across a strictly higher versionCode).
-        versionCode = 7
-        versionName = "2.12"
+        versionCode = 8
+        versionName = "2.13"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -29,9 +29,10 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Signing is injected from env (CI) or gradle properties (local).
-            // Falls back to the debug keystore so release builds are always
-            // installable and mini-sized for testers (the debug APK ships
-            // unstripped native libs + unminified dex, ~3x larger).
+            // CI injects a stable release keystore from repository secrets so
+            // every published version shares one signature and can be installed
+            // over the previous one. Falls back to the debug keystore so local
+            // builds are installable too.
             val storePath = System.getenv("ACFCN_KEYSTORE") ?: (project.findProperty("acfcn.keystore") as String?)
             if (!storePath.isNullOrBlank() && file(storePath).exists()) {
                 signingConfig = signingConfigs.create("release") {
