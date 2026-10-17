@@ -12,11 +12,11 @@ android {
         applicationId = "com.selfmod.agent"
         minSdk = 26
         targetSdk = 34
-        // Keep in sync with release tags: tag v2.10 -> versionName "2.10",
+        // Keep in sync with release tags: tag v2.11 -> versionName "2.11",
         // versionCode bumps by 1 every release (older installs can only
         // upgrade across a strictly higher versionCode).
-        versionCode = 5
-        versionName = "2.10"
+        versionCode = 6
+        versionName = "2.11"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -29,7 +29,9 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Signing is injected from env (CI) or gradle properties (local).
-            // Falls back to unsigned/debug so local builds never break.
+            // Falls back to the debug keystore so release builds are always
+            // installable and mini-sized for testers (the debug APK ships
+            // unstripped native libs + unminified dex, ~3x larger).
             val storePath = System.getenv("ACFCN_KEYSTORE") ?: (project.findProperty("acfcn.keystore") as String?)
             if (!storePath.isNullOrBlank() && file(storePath).exists()) {
                 signingConfig = signingConfigs.create("release") {
@@ -38,6 +40,8 @@ android {
                     keyAlias = System.getenv("ACFCN_KEY_ALIAS") ?: (project.findProperty("acfcn.keyAlias") as String?) ?: ""
                     keyPassword = System.getenv("ACFCN_KEY_PASSWORD") ?: (project.findProperty("acfcn.keyPassword") as String?) ?: ""
                 }
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
             }
         }
     }

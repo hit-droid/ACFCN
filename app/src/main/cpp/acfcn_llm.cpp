@@ -115,6 +115,7 @@ struct Engine {
     llama_context *ctx   = nullptr;
     const llama_vocab *vocab = nullptr;
     std::atomic<int> n_ctx {2048};
+    std::atomic<int> gpu_layers {0};
     int n_batch = 64;
     std::mutex mu;
     std::condition_variable cv;
@@ -321,19 +322,22 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 
     llama_model_params mparams = llama_model_default_params();
 #ifdef ACFCN_USE_OPENCL
-    // The OpenCL backend is compiled in, but GPU offload is opt-in and defaults
-    // to CPU: the Adreno-optimized path is only faster on some GPUs (Adreno 740
-    // is not in the upstream verified list). Enable it per run with
-    //   adb shell setprop debug.acfcn.gpu_layers 99
-    // The CPU path itself is fast here because CMake builds it with the ARM
-    // dotprod + fp16 kernels (see GGML_CPU_ARM_ARCH).
-    int gpu_layers = get_property_int("debug.acfcn.gpu_layers", 0);
+    // Use the GPU when it works and fall back to CPU automatically. llama.cpp
+    // silently keeps any layer it cannot place on the GPU on the CPU, and skips
+    // the GPU backend entirely if it fails to initialise, so offloading all
+    // layers is safe: on an unsupported Adreno we still run on the optimized
+    // ARM CPU path. Override per run with
+    //   adb shell setprop debug.acfcn.gpu_layers 0    # force CPU
+    //   adb shell setprop debug.acfcn.gpu_layers 99   # force GPU
+    int gpu_layers = get_property_int("debug.acfcn.gpu_layers", 99);
     if (gpu_layers < 0) gpu_layers = 0;
     mparams.n_gpu_layers = gpu_layers;
+    g_engine.gpu_layers.store(gpu_layers);
     LOGI("OpenCL backend built in; n_gpu_layers=%d (override: debug.acfcn.gpu_layers)",
          (int) mparams.n_gpu_layers);
 #else
     mparams.n_gpu_layers = 0; // CPU only; keeps it portable across all arm64 phones
+    g_engine.gpu_layers.store(0);
 #endif
 
     // mmap: map the weights instead of reading them fully into RAM. This is the
@@ -701,4 +705,13 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeContextSize(
         JNIEnv * /*env*/, jobject /*thiz*/) {
     return g_engine.n_ctx.load();
+}
+
+// Number of layers the last model load requested on the GPU (0 = CPU only).
+// Surfaced to Kotlin so the in-app diagnostics can show whether GPU offload was
+// active without needing adb logcat.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeLastGpuLayers(
+        JNIEnv * /*env*/, jobject /*thiz*/) {
+    return g_engine.gpu_layers.load();
 }

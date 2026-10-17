@@ -6,7 +6,7 @@ ACFCN 是一个运行在 Android 上的**自进化智能体**应用：它能编�
 
 - **智能体 Tab**：思考-行动-观察循环；流式输出；停止 / 重试；会话自动持久化；Markdown 渲染（代码块可复制）。
 - **浏览器 Tab**：常驻 WebView，用户与智能体共用；按编号元素操作（snapshot/click/type/extract）；智能体点击时页面高亮标记；历史记录、返回键处理。
-- **离线 Tab**：**端侧推理**（内置 llama.cpp JNI，arm64，mmap；ARM dotprod CPU 加速 + 可选 Adreno GPU，见下）；导入 GGUF；按机型下调 ctx/batch；诊断日志。
+- **离线 Tab**：**端侧推理**（内置 llama.cpp JNI，arm64，mmap；ARM dotprod CPU 加速 + Adreno GPU 自动，见下）；导入 GGUF；按机型下调 ctx/batch；诊断日志。
 - **脚本 Tab**：沙箱内执行 JavaScript（Rhino），持久化脚本 + 自动版本回滚。
 - **插件 Tab**：运行时通过 DexClassLoader 加载 `.dex` 插件。
 - **API Tab**：云端 / 本机预设一键接入，测试连接、列出模型、配置档案；**API Key 使用系统密钥库加密存储**；存储空间查看与清理。
@@ -21,27 +21,30 @@ ACFCN 是一个运行在 Android 上的**自进化智能体**应用：它能编�
 
 > 端侧仅支持 arm64-v8a。模型越大越吃内存：2B 需约 3GB 空闲内存。
 
-### 端侧加速（CPU dotprod + 可选 GPU）
+### 端侧加速（CPU dotprod + GPU 自动）
 
-构建默认启用 ARMv8.2 的 `dotprod`/`fp16` 内核，量化（Q4_K）矩阵乘会走 SDOT/UDOT，比 NDK 默认的 armv8-a 基线快数倍。
+构建默认启用 ARMv8.2 的 `dotprod`/`fp16` 内核，量化（Q4_K）矩阵乘走 SDOT/UDOT，比 NDK 默认的 armv8-a 基线快数倍。
 
-Release 包同时内置 llama.cpp 的 OpenCL 后端（Adreno），但 **GPU offload 默认关闭**：Adreno 740 不在上游已验证列表，GPU 未必比优化后的 CPU 快。可在设备上按需开启（下次加载模型生效）：
+Release 包内置 llama.cpp 的 OpenCL 后端（Adreno）。模型加载时默认尝试把全部层放到 GPU；GPU 后端初始化失败会自动回退到上面的优化 CPU 路径，无需手动切换。如需强制指定，用运行时开关（下次加载模型生效）：
 
 ```bash
-# 全部层 offload 到 GPU
+# 强制纯 CPU
+adb shell setprop debug.acfcn.gpu_layers 0
+
+# 强制全部层走 GPU
 adb shell setprop debug.acfcn.gpu_layers 99
 
 # 覆盖线程数（默认按 CPU 核数）
 adb shell setprop debug.acfcn.threads 8
 ```
 
-诊断日志（含 llama.cpp/ggml 与 OpenCL 后端输出）：
+App 离线页「诊断日志」会显示实际生效的 GPU 层数、首 token 耗时、总耗时与解码 tok/s，可直接对比；详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：
 
 ```bash
 adb logcat -s ACFCN-LLM
 ```
 
-关注 `n_gpu_layers=`、`OpenCL: using ICD ...`，以及生成结束时打印的 `prefill done ... tok/s` 与 `decode done ... tok/s`，用于对比 CPU 与 GPU 两组性能。
+重点看 `n_gpu_layers=`、`OpenCL: using ICD ...`、`prefill done ... tok/s`、`decode done ... tok/s`。
 
 本地从源码构建时，如需自行验证 OpenCL 路径：
 
