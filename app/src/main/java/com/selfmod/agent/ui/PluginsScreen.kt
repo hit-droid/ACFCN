@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,13 +32,14 @@ import com.selfmod.agent.ui.theme.Danger
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import com.selfmod.agent.ui.glass.glass
 
 @Composable
 fun PluginsScreen(vm: AgentViewModel) {
     var available by remember { mutableStateOf(vm.availablePlugins()) }
     var loaded by remember { mutableStateOf(vm.loadedPlugins()) }
 
-    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text("Dex 插件", color = TextPrimary, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             OutlinedButton(onClick = {
@@ -52,7 +54,7 @@ fun PluginsScreen(vm: AgentViewModel) {
 
         if (available.isEmpty()) {
             Column(
-                Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(16.dp),
+                Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(16.dp),
             ) {
                 Text("尚无已安装插件。", color = TextSecondary, fontSize = 13.sp)
                 Spacer(Modifier.height(4.dp))
@@ -65,31 +67,28 @@ fun PluginsScreen(vm: AgentViewModel) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(available) { name ->
                     val isLoaded = loaded.contains(name)
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = SurfaceVariant),
+                    Column(
+                        Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                Text(name, color = TextPrimary, modifier = Modifier.weight(1f), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-                                Text(
-                                    if (isLoaded) "已加载" else "未加载",
-                                    color = if (isLoaded) AccentGreen else TextSecondary,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = {
-                                    vm.loadPlugin(name); loaded = vm.loadedPlugins()
-                                }, enabled = !isLoaded) { Text("加载") }
-                                OutlinedButton(onClick = {
-                                    vm.unloadPlugin(name); loaded = vm.loadedPlugins()
-                                }, enabled = isLoaded) { Text("卸载") }
-                                OutlinedButton(onClick = {
-                                    vm.deletePlugin(name); available = vm.availablePlugins(); loaded = vm.loadedPlugins()
-                                }) { Text("删除") }
-                            }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text(name, color = TextPrimary, modifier = Modifier.weight(1f), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                            Text(
+                                if (isLoaded) "已加载" else "未加载",
+                                color = if (isLoaded) AccentGreen else TextSecondary,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                vm.loadPlugin(name); loaded = vm.loadedPlugins()
+                            }, enabled = !isLoaded) { Text("加载") }
+                            OutlinedButton(onClick = {
+                                vm.unloadPlugin(name); loaded = vm.loadedPlugins()
+                            }, enabled = isLoaded) { Text("卸载") }
+                            OutlinedButton(onClick = {
+                                vm.deletePlugin(name); available = vm.availablePlugins(); loaded = vm.loadedPlugins()
+                            }) { Text("删除") }
                         }
                     }
                 }

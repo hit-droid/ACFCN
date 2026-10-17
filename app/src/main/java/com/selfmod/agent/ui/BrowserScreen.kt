@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,6 +47,7 @@ import com.selfmod.agent.ui.theme.SurfaceDark
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import com.selfmod.agent.ui.glass.glass
 
 @Composable
 fun PersistentWebView(vm: AgentViewModel, visible: Boolean) {
@@ -78,7 +80,8 @@ fun BrowserChrome(vm: AgentViewModel) {
 
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().background(SurfaceDark).padding(horizontal = 4.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().statusBarsPadding().glass(RoundedCornerShape(22.dp), elevation = 10.dp)
+                .padding(horizontal = 4.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { browser.goBack() }, enabled = canBack, modifier = Modifier.size(38.dp)) {
@@ -111,7 +114,7 @@ fun BrowserChrome(vm: AgentViewModel) {
         }
 
         Row(
-            Modifier.fillMaxWidth().background(SurfaceVariant).padding(horizontal = 8.dp),
+            Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { browser.open(BrowserController.HOME) }, modifier = Modifier.size(34.dp)) {
@@ -133,7 +136,7 @@ fun BrowserChrome(vm: AgentViewModel) {
 
         AnimatedVisibility(visible = showHistory) {
             Column(
-                Modifier.fillMaxWidth().background(SurfaceDark).heightIn(max = 220.dp),
+                Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), elevation = 6.dp).heightIn(max = 220.dp),
             ) {
                 if (history.isEmpty()) {
                     Text("暂无历史", color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(12.dp))

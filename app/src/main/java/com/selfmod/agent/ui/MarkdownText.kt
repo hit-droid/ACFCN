@@ -42,6 +42,7 @@ import com.selfmod.agent.ui.theme.AccentBlue
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import com.selfmod.agent.ui.glass.glass
 
 private sealed interface MdBlock {
     data class Paragraph(val text: String) : MdBlock
@@ -139,7 +140,7 @@ fun MarkdownText(md: String, modifier: Modifier = Modifier, baseColor: Color = T
                     InlineText(block.text, baseColor, fontSize = 15.sp, lineHeight = 21.sp)
                 }
                 is MdBlock.Quote -> Row(
-                    Modifier.fillMaxWidth().background(SurfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(6.dp)),
+                    Modifier.fillMaxWidth().glass(RoundedCornerShape(14.dp), elevation = 4.dp).padding(horizontal = 0.dp),
                 ) {
                     Box(Modifier.width(3.dp).padding(vertical = 4.dp).background(AccentBlue))
                     InlineText(
