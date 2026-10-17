@@ -38,7 +38,7 @@ adb shell setprop debug.acfcn.gpu_layers 99
 adb shell setprop debug.acfcn.threads 8
 ```
 
-App 离线页「诊断日志」会显示实际生效的 GPU 层数、首 token 耗时、总耗时与解码 tok/s，可直接对比；详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：
+App 离线页「诊断日志」在加载后会显示：本构建是否支持 GPU offload、请求的 GPU 层数、CPU 指令集（确认 dotprod 已启用）、以及 llama.cpp 打印的 OpenCL 设备与实际放置到 GPU 的层数；生成后还会显示首 token、总耗时与解码 tok/s。以上均无需 adb。详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：
 
 ```bash
 adb logcat -s ACFCN-LLM
