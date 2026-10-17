@@ -282,12 +282,14 @@ bool path_exists(const char *path) {
     return path != nullptr && stat(path, &st) == 0;
 }
 
-// Android exposes no public libOpenCL.so, so the app ships the Khronos ICD
-// loader (see scripts/setup-opencl-ndk.sh). That loader has no built-in
-// knowledge of Qualcomm's driver, so on first use point it at the vendor
-// implementation unless the caller already set an ICD override. We only read
-// paths and set an env var here; actual device bring-up is logged so a real-device
-// run can confirm which driver was picked.
+// Android exposes no public libOpenCL.so, so the app ships a forwarding
+// wrapper named libOpenCL.so (see opencl_wrapper.c +
+// scripts/setup-opencl-ndk.sh; the Khronos ICD loader from v2.14 is gone
+// because Adreno drivers implement no ICD entry and yielded 0 devices).
+// The wrapper dlopen()s the vendor driver by absolute path. Unless the caller
+// already set an override, seed the path candidates from well-known locations
+// here; the wrapper understands OCL_ICD_FILENAMES (absolute paths) but NOT the
+// .icd-dir machinery, so we skip that branch entirely.
 void ensure_opencl_icd_configured() {
     const char *filenames = getenv("OCL_ICD_FILENAMES");
     const char *vendors = getenv("OCL_ICD_VENDORS");

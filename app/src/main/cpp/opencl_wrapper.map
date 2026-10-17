@@ -1,0 +1,45 @@
+OPENCL_1.0 {
+    clBuildProgram;
+    clCreateBuffer;
+    clCreateCommandQueue;
+    clCreateContext;
+    clCreateKernel;
+    clCreateProgramWithBinary;
+    clCreateProgramWithSource;
+    clEnqueueCopyBuffer;
+    clEnqueueMapBuffer;
+    clEnqueueNDRangeKernel;
+    clEnqueueReadBuffer;
+    clEnqueueUnmapMemObject;
+    clEnqueueWriteBuffer;
+    clFinish;
+    clFlush;
+    clGetDeviceIDs;
+    clGetDeviceInfo;
+    clGetKernelWorkGroupInfo;
+    clGetPlatformIDs;
+    clGetPlatformInfo;
+    clGetProgramBuildInfo;
+    clGetProgramInfo;
+    clReleaseEvent;
+    clReleaseKernel;
+    clReleaseMemObject;
+    clReleaseProgram;
+    clSetKernelArg;
+    clWaitForEvents;
+};
+OPENCL_1.1 {
+    clCreateSubBuffer;
+};
+OPENCL_1.2 {
+    clCreateImage;
+    clEnqueueBarrierWithWaitList;
+    clEnqueueFillBuffer;
+    clEnqueueMarkerWithWaitList;
+};
+OPENCL_2.1 {
+    clGetKernelSubGroupInfo;
+};
+OPENCL_3.0 {
+    clCreateBufferWithProperties;
+};
