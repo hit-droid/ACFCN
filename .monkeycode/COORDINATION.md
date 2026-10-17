@@ -55,7 +55,7 @@
 - [x] H7 浏览器 `click/type` 索引防漂移 — **已修复**（PR #2, merge 43dc398）
 - [x] H8 崩溃存档静默丢失 — **已修复**（PR #6, merge c6e9297）
 - [x] H9 Android 16 卡顿/ANR — **已修复**（PR #21, merge 146f69c）
-- [@opencode] 260416-chore-h10-merge-note H10 端侧推理 tokens/s 本体 — **OpenCL/Adreno GPU offload 已合**（PR #35, merge 37a54ae）；**CPU dotprod 加速 + 运行时诊断已合**（PR #38, merge a1b7f9f；默认走 ARMv8.2 dotprod CPU，GPU offload 改为 `debug.acfcn.gpu_layers` 开关，日志转 logcat，prefill/decode tok/s 插桩）；已发 v2.10（PR #39, merge 87d478c）。剩余：真机两组 tok/s 对比（CPU vs GPU）、线程大核策略、KV 复用、批量 prefill
+- [@opencode] 260416-chore-h10-merge-note H10 端侧推理 tokens/s 本体 — **CPU dotprod + OpenCL 能力 + GPU 自动回退 + 应用内 tok/s 指标已合**（#35 37a54ae、#38 a1b7f9f、#41 cd3dd31；已发 v2.10、v2.11）；剩余：真机核对 GPU 是否生效、线程大核策略、KV 复用、批量 prefill
 
 ### 中严重度
 - [x] M1 `nativeGenerate()` 死代码 — **已删除**（`chore/remove-native-generate`；Kotlin `generate()` 无调用者，连同 JNI export 一并移除）
