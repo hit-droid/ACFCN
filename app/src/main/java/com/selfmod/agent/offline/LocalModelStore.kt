@@ -84,18 +84,27 @@ class LocalModelStore(private val context: Context) {
                 cr.openInputStream(uri)?.use { GgufHeader.parse(it) }
             }.getOrNull()
         } else null
+        // An MNN model is a directory (or a zip of one), so peek inside the
+        // archive for config.json — otherwise the list can only say "zip".
+        val mnnInfo = if (format == "mnn") {
+            runCatching { readMnnInfo(uri, display) }.getOrNull()
+        } else null
         val model = LocalModel(
             id = UUID.randomUUID().toString(),
-            name = info?.name?.ifBlank { display } ?: display,
+            name = info?.name?.takeIf { it.isNotBlank() }
+                ?: mnnInfo?.first?.takeIf { it.isNotBlank() }
+                ?: display,
             uri = uri.toString(),
             sizeBytes = size,
             format = format,
             importedAt = System.currentTimeMillis(),
-            architecture = info?.architecture.orEmpty(),
+            architecture = info?.architecture?.takeIf { it.isNotBlank() }
+                ?: mnnInfo?.second?.modelType.orEmpty(),
             quant = info?.quant.orEmpty(),
             contextLength = info?.contextLength ?: 0L,
             parameterCount = info?.parameterCount ?: 0L,
-            summary = info?.summary().orEmpty(),
+            summary = info?.summary()?.takeIf { it.isNotBlank() }
+                ?: mnnInfo?.second?.summary().orEmpty(),
         )
         val all = list().toMutableList()
         all.removeAll { it.uri == model.uri }
@@ -111,17 +120,23 @@ class LocalModelStore(private val context: Context) {
         m?.let {
             runCatching { File(modelsDir, sanitize(it.name)).delete() }
             runCatching { File(modelsDir, sanitize(it.name) + ".part").delete() }
+            // MNN bundles are extracted directories (plus a staging dir).
+            runCatching { File(modelsDir, "mnn-" + sanitize(it.id)).deleteRecursively() }
+            runCatching { File(modelsDir, "mnn-" + sanitize(it.id) + ".part").deleteRecursively() }
         }
     }
 
-    /** Total bytes currently used by copied model files. */
+    /** Total bytes currently used by copied model files and extracted MNN dirs. */
     fun copiedBytes(): Long =
-        modelsDir.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L
+        modelsDir.listFiles()?.sumOf { f ->
+            if (f.isDirectory) f.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            else f.length()
+        } ?: 0L
 
-    /** Deletes every copied weight file (keeps the registry entries). */
+    /** Deletes every copied weight file and extracted MNN dir (keeps the registry). */
     fun deleteAllCopies(): Long {
         val freed = copiedBytes()
-        modelsDir.listFiles()?.forEach { runCatching { it.delete() } }
+        modelsDir.listFiles()?.forEach { runCatching { it.deleteRecursively() } }
         return freed
     }
 
@@ -136,11 +151,15 @@ class LocalModelStore(private val context: Context) {
      * (common for Downloads / Documents via `_data`), use it directly — no copy,
      * no extra disk. (2) otherwise copy into app storage, reporting progress.
      *
+     * For an MNN model this returns the model *directory* instead (MNN resolves
+     * config.json's siblings relative to it); see [materializeMnn].
+     *
      * @param onProgress called with 0..1 during a copy, or -1f when no copy is
      *                   needed (fast path). Never called after the function returns.
      */
     fun materialize(id: String, onProgress: ((Float) -> Unit)? = null): File? {
         val m = find(id) ?: return null
+        if (m.format == "mnn") return materializeMnn(m, onProgress)
 
         // 1) Try to resolve a real path from the content URI (no copy).
         resolveRealPath(Uri.parse(m.uri))?.let { p ->
@@ -194,6 +213,85 @@ class LocalModelStore(private val context: Context) {
     }
 
     /**
+     * Extracts an MNN model bundle into a directory and returns that directory.
+     *
+     * MNN needs all of config.json / llm.mnn / llm.mnn.weight / tokenizer.mtok
+     * on disk as siblings, so unlike GGUF we cannot read it from the content URI
+     * — it has to be unpacked. Extraction lands in `<models>/mnn-<id>/` via a
+     * staging dir that is only renamed into place once every entry is written,
+     * so a cancelled extract never leaves a half-model behind that MNN would
+     * then try to load.
+     */
+    private fun materializeMnn(m: LocalModel, onProgress: ((Float) -> Unit)?): File? {
+        val dest = File(modelsDir, "mnn-" + sanitize(m.id))
+        if (File(dest, MnnModelDir.configPath()).exists()) {
+            onProgress?.invoke(-1f)
+            return dest
+        }
+        val staging = File(modelsDir, "mnn-" + sanitize(m.id) + ".part")
+        return runCatching {
+            staging.deleteRecursively()
+            staging.mkdirs()
+            val stream = context.contentResolver.openInputStream(Uri.parse(m.uri))
+                ?: return@runCatching null
+            val total = if (m.sizeBytes > 0) m.sizeBytes.toDouble() else -1.0
+            var read = 0L
+            var lastEmit = 0L
+            stream.use { ins ->
+                java.util.zip.ZipInputStream(ins).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        val name = entry.name
+                        // Guard against zip-slip: only ever write inside staging.
+                        val target = File(staging, name).canonicalFile
+                        if (!target.path.startsWith(staging.canonicalFile.path)) {
+                            throw java.io.IOException("zip 条目越界：$name")
+                        }
+                        if (entry.isDirectory) {
+                            target.mkdirs()
+                        } else {
+                            target.parentFile?.mkdirs()
+                            target.outputStream().use { out ->
+                                val buf = ByteArray(1 shl 20)
+                                while (true) {
+                                    val n = zip.read(buf)
+                                    if (n <= 0) break
+                                    out.write(buf, 0, n)
+                                    read += n
+                                    // Throttle UI updates to ~every 16 MB.
+                                    if (onProgress != null && total > 0 && read - lastEmit >= (16L shl 20)) {
+                                        lastEmit = read
+                                        onProgress((read / total).toFloat().coerceIn(0f, 0.99f))
+                                    }
+                                }
+                                out.flush()
+                            }
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+            // HF bundles nest everything in one top-level folder; lift it so the
+            // model files sit directly in `dest` as MNN expects.
+            val children = staging.listFiles().orEmpty()
+            val root = if (children.size == 1 && children[0].isDirectory) children[0] else staging
+            if (!File(root, MnnModelDir.configPath()).exists()) {
+                throw java.io.IOException("压缩包里没有 config.json，不像是 MNN 模型")
+            }
+            dest.deleteRecursively()
+            if (!root.renameTo(dest)) {
+                root.copyRecursively(dest, overwrite = true)
+                root.deleteRecursively()
+            }
+            onProgress?.invoke(1f)
+            dest
+        }.onFailure {
+            staging.deleteRecursively()
+        }.getOrNull()
+    }
+
+    /**
      * Best-effort: resolve a content:// URI to a real file path via the provider's _data column.
      */
     private fun resolveRealPath(uri: Uri): String? {
@@ -223,6 +321,11 @@ class LocalModelStore(private val context: Context) {
             val f = File(p)
             if (f.exists() && f.canRead()) return f.absolutePath
         }
+        // MNN models are unpacked into a per-id directory, not a named file.
+        if (m.format == "mnn") {
+            val dir = File(modelsDir, "mnn-" + sanitize(m.id))
+            return if (File(dir, MnnModelDir.configPath()).exists()) dir.absolutePath else null
+        }
         // Fall back to an already-copied file (matches materialize step 2).
         val candidate = File(modelsDir, sanitize(m.name))
         return if (candidate.exists()) candidate.absolutePath else null
@@ -236,6 +339,10 @@ class LocalModelStore(private val context: Context) {
      */
     fun localPathFor(id: String): String? {
         val m = find(id) ?: return null
+        if (m.format == "mnn") {
+            val dir = File(modelsDir, "mnn-" + sanitize(m.id))
+            return if (dir.exists()) dir.absolutePath else null
+        }
         val candidate = File(modelsDir, sanitize(m.name))
         return if (candidate.exists()) candidate.absolutePath else null
     }
@@ -271,6 +378,13 @@ class LocalModelStore(private val context: Context) {
             lower.endsWith(".onnx") -> return "onnx"
             lower.endsWith(".bin") -> return "bin"
             lower.endsWith(".safetensors") -> return "safetensors"
+            lower.endsWith(".mnn") || lower.endsWith(".mnn.weight") -> return "mnn"
+        }
+        // A zip could be an MNN model bundle; look for the marker entries.
+        if (lower.endsWith(".zip")) {
+            val marker = runCatching { zipEntryNames(uri).any { MnnModelDir.isModelMarker(it) } }
+                .getOrDefault(false)
+            if (marker) return "mnn"
         }
         runCatching {
             context.contentResolver.openInputStream(uri)?.use { ins ->
@@ -280,6 +394,69 @@ class LocalModelStore(private val context: Context) {
         }
         return "unknown"
     }
+
+    /** Lists entry names in a zip without extracting it. */
+    private fun zipEntryNames(uri: Uri): List<String> {
+        val out = ArrayList<String>()
+        val stream = context.contentResolver.openInputStream(uri) ?: return out
+        stream.use { ins ->
+            java.util.zip.ZipInputStream(ins).use { zip ->
+                var e = zip.nextEntry
+                while (e != null) {
+                    out.add(e.name)
+                    zip.closeEntry()
+                    e = zip.nextEntry
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * Best-effort description of an MNN model: its display name and the parsed
+     * [MnnModelInfo]. Works for both a zipped bundle and a loose directory-like
+     * selection (a single .mnn/.mnn.weight whose siblings we cannot see).
+     */
+    private fun readMnnInfo(uri: Uri, display: String): Pair<String, MnnModelInfo> {
+        val names = runCatching { zipEntryNames(uri) }.getOrDefault(emptyList())
+        if (names.isEmpty()) {
+            // Loose file: we only know the one name the picker handed us.
+            val info = MnnModelDir.inspect(listOf(display), null)
+            val stem = display.substringBeforeLast('.')
+            return stem to info
+        }
+        // Common prefix directory: HF bundles wrap everything in one folder.
+        val top = names.filter { !it.endsWith("/") }
+        val prefix = top.map { it.substringBeforeLast('/', "") }
+            .distinct()
+            .singleOrNull()
+            .orEmpty()
+        val baseNames = top.map { it.removePrefix(if (prefix.isEmpty()) "" else "$prefix/") }
+        val configJson = readZipEntry(uri, if (prefix.isEmpty()) "config.json" else "$prefix/config.json")
+        val info = MnnModelDir.inspect(baseNames, configJson)
+        val folderName = prefix.substringAfterLast('/').ifBlank { display.substringBeforeLast('.') }
+        return folderName to info
+    }
+
+    /** Reads one entry's text out of a zip, or null. */
+    private fun readZipEntry(uri: Uri, wanted: String): String? = runCatching {
+        val stream = context.contentResolver.openInputStream(uri) ?: return@runCatching null
+        stream.use { ins ->
+            val zip = java.util.zip.ZipInputStream(ins)
+            zip.use { z ->
+                var found: String? = null
+                while (found == null) {
+                    val e = z.nextEntry ?: break
+                    if (e.name == wanted) {
+                        found = z.readBytes().toString(Charsets.UTF_8)
+                    } else {
+                        z.closeEntry()
+                    }
+                }
+                found
+            }
+        }
+    }.getOrNull()
 
     companion object {
         private const val PREFS = "selfmod_local_models"

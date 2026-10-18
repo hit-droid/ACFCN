@@ -31,9 +31,18 @@ Thumbs.db
 app-debug.apk
 SelfModAgent-debug.apk
 
-# Generated OpenCL ICD loader (built by scripts/setup-opencl-ndk.sh) — every ABI's
-# build output stays ignored, EXCEPT the NDK-cross-compiled proot runtime, which
-# is a source-level asset shipped in the APK (see specs/linux-container/).
+# Generated OpenCL ICD loader (built by scripts/setup-opencl-ndk.sh) — the
+# loader itself is a build output and stays ignored.
+# Prebuilt OpenCL ICD loader (built by scripts/setup-opencl-ndk.sh)
+app/src/main/jniLibs/libOpenCL.so
+# Every ABI's build output under jniLibs stays ignored, EXCEPT files that are
+# source-level assets shipped in the APK: the NDK-cross-compiled proot runtime
+# (see specs/linux-container/) and the MNN 3.6.1 prebuilt engine libs.
 app/src/main/jniLibs/*/*
 !app/src/main/jniLibs/arm64-v8a/libproot.so
 !app/src/main/jniLibs/arm64-v8a/libproot-loader.so
+# MNN prebuilts under jniLibs/arm64-v8a/ are intentionally committed
+!app/src/main/jniLibs/arm64-v8a/libMNN*.so
+!app/src/main/jniLibs/arm64-v8a/libllm.so
+!app/src/main/jniLibs/arm64-v8a/libmnncore.so
+!app/src/main/jniLibs/arm64-v8a/libc++_shared.so
