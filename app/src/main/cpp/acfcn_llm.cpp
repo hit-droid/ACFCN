@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <chrono>
 #include <algorithm>
 #include <csignal>
@@ -160,6 +161,7 @@ struct Engine {
     // prefix happens in generate_impl().
     std::vector<llama_token> kv_tokens;
     bool kv_valid = false;
+    std::string last_stats;   // one-line perf summary for the in-app log
 };
 
 Engine g_engine;
@@ -203,6 +205,7 @@ void free_locked() {
     g_engine.kv_valid = false;
     g_engine.kv_tokens.clear();
     g_engine.kv_tokens.shrink_to_fit();
+    g_engine.last_stats.clear();
 }
 
 void wait_idle_locked(std::unique_lock<std::mutex> &lock) {
@@ -457,6 +460,32 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     cparams.n_threads = threads;
     cparams.n_threads_batch = threads;
 
+    // Flash attention on OpenCL/Adreno: the E031.41 driver compiler crashes
+    // building the FA kernel when the f32 query meets an f16 KV cache, and
+    // ggml then silently disables FA ("Flash Attention is assigned to device
+    // CPU"). The uniform f32/f32 program compiles fine, so pair FA with an f32
+    // KV cache. Fusing attention removes several kernels per layer per token,
+    // which dominates decode cost on this driver. debug.acfcn.fa=off reverts
+    // to f16 KV without FA.
+    {
+        char value[PROP_VALUE_MAX] = {0};
+        bool fa = true;
+        int len = __system_property_get("debug.acfcn.fa", value);
+        if (len > 0) {
+            std::string v(value);
+            fa = !(v == "off" || v == "0" || v == "false");
+        }
+        if (fa && mparams.n_gpu_layers != 0) {
+            cparams.type_k = GGML_TYPE_F32;
+            cparams.type_v = GGML_TYPE_F32;
+            cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            LOGI("flash attn enabled, kv cache f32");
+        } else {
+            cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            LOGI("flash attn disabled, kv cache f16");
+        }
+    }
+
     LOGI("ctx params: n_ctx=%u n_batch=%u n_ubatch=%u threads=%d",
          cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, threads);
 
@@ -665,6 +694,8 @@ static jint generate_impl(
     std::vector<llama_token> gen_committed;   // reply ids actually decoded
 
     int pos = common;
+    long long prefill_ms = 0, decode_ms = 0;
+    int n_new = 0;
     LOGI("prefill start: %d prompt tokens from pos %d", (int) tokens.size(), common);
     auto prefill_t0 = std::chrono::steady_clock::now();
     while (!fail && pos < (int) tokens.size()) {
@@ -709,9 +740,9 @@ static jint generate_impl(
     if (!fail) prefill_complete = true;
 
     if (!fail) {
-        auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - prefill_t0).count();
-        int n_new = (int) tokens.size() - common;
+        n_new = (int) tokens.size() - common;
         double prefill_tps = prefill_ms > 0
                 ? (double) n_new * 1000.0 / (double) prefill_ms : 0.0;
         LOGI("prefill done in %lld ms (%d new tokens, %.2f tok/s)",
@@ -782,7 +813,7 @@ static jint generate_impl(
         }
         if (!fail) result = emitted;
 
-        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - decode_t0).count();
         double decode_tps = decode_ms > 0 ? (double) emitted * 1000.0 / (double) decode_ms : 0.0;
         LOGI("decode done in %lld ms (%d tokens, %.2f tok/s)",
@@ -804,6 +835,13 @@ static jint generate_impl(
             }
             g_engine.kv_tokens = std::move(saved);
             g_engine.kv_valid = !g_engine.kv_tokens.empty();
+            char stats[256];
+            snprintf(stats, sizeof(stats),
+                     "chat perf: prefill %lldms (%d new/%d tok), decode %lldms (%d tok, %.2f tok/s), kv reuse %d/%d",
+                     prefill_ms, n_new, (int) tokens.size(), decode_ms, emitted,
+                     decode_ms > 0 ? (double) emitted * 1000.0 / (double) decode_ms : 0.0,
+                     common, (int) tokens.size());
+            g_engine.last_stats = stats;
         } else {
             g_engine.kv_tokens.clear();
             g_engine.kv_valid = false;
@@ -888,4 +926,13 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeLoadInfo(
         JNIEnv *env, jobject /*thiz*/) {
     std::lock_guard<std::mutex> lk(g_gpu_log_mu);
     return env->NewStringUTF(g_load_info.c_str());
+}
+
+// One-line perf summary of the last generation (prefix reuse, prefill/decode
+// timings) so the in-app diagnostics can verify a speedup without adb.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeLastChatStats(
+        JNIEnv *env, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> lk(g_engine.mu);
+    return env->NewStringUTF(g_engine.last_stats.c_str());
 }

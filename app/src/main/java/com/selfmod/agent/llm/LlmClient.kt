@@ -98,6 +98,10 @@ class LlmClient(
                 }
             },
         )
+        runCatching { engine.lastChatStats() }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { Diagnostics.log("engine", it) }
         if (code == -98 || cancelled()) {
             throw LlmException(499, "cancelled")
         }

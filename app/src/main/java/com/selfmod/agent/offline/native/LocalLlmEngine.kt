@@ -203,8 +203,12 @@ class LocalLlmEngine {
     ): Int
     private external fun nativeChatTemplate(): String
     private external fun nativeContextSize(): Int
+    fun lastChatStats(): String =
+        if (loaded) runCatching { nativeLastChatStats() }.getOrDefault("") else ""
+
     private external fun nativeLastGpuLayers(): Int
     private external fun nativeLoadInfo(): String
+    private external fun nativeLastChatStats(): String
 
     companion object {
         @Volatile
