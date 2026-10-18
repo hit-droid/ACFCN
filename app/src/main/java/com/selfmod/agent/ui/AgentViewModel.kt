@@ -97,16 +97,34 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private val streamBuffer = StringBuilder()
     private val streamPacer = DeltaPacer()
 
+    /**
+     * Id of the session the trace currently shows. Persisted in settings so a
+     * process death reopens the same conversation instead of a fresh one.
+     */
+    private var currentSessionId: String = ""
+
+    private val _sessionList = MutableStateFlow<List<com.selfmod.agent.store.SessionSummary>>(emptyList())
+    val sessionList: StateFlow<List<com.selfmod.agent.store.SessionSummary>> = _sessionList.asStateFlow()
+
     init {
+        // Reopen the last session; a fresh install (or a session deleted from
+        // under us) starts a new empty one.
+        val savedId = app.settings.currentSessionId()
+        currentSessionId = if (savedId != null && app.sessions.sessionFileExists(savedId)) {
+            savedId
+        } else {
+            app.sessions.newSessionId().also { app.settings.setCurrentSessionId(it) }
+        }
         reset()
-        loadSession()
+        loadSession(currentSessionId)
+        refreshSessions()
     }
 
-    private fun loadSession() {
+    private fun loadSession(id: String) {
         // H9: restoring up to ~640KB of JSON on the main thread froze first
         // frame; decode off-main, apply on main only if the user hasn't acted.
         viewModelScope.launch(Dispatchers.IO) {
-            val saved = runCatching { app.sessions.load() }.getOrDefault(emptyList())
+            val saved = runCatching { app.sessions.loadSession(id) }.getOrDefault(emptyList())
             withContext(Dispatchers.Main) {
                 if (saved.isEmpty()) return@withContext
                 if (_trace.value.isNotEmpty()) return@withContext
@@ -189,11 +207,108 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         // H9: encode off the main thread; snapshot first — `history` keeps
         // mutating on the agent loop while we serialize.
         val snapshot = ArrayList(history)
+        val id = currentSessionId
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { app.sessions.save(snapshot) }
+            runCatching { app.sessions.saveSession(id, snapshot) }
+            val list = runCatching { app.sessions.listSessions() }.getOrDefault(emptyList())
+            _sessionList.value = list
         }
     }
 
+    /** Session list for the drawer; cheap — index only, no message decode. */
+    fun refreshSessions() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = runCatching { app.sessions.listSessions() }.getOrDefault(emptyList())
+            _sessionList.value = list
+        }
+    }
+
+    /**
+     * Starts a fresh session. The old one stays in the list (its file was
+     * written by [persistSession]) so nothing is lost — unlike the old
+     * single-slot "清空" which dropped the only history there was.
+     */
+    fun newSession() {
+        stop()
+        currentSessionId = app.sessions.newSessionId()
+        app.settings.setCurrentSessionId(currentSessionId)
+        history.clear()
+        history.add(ChatMessage("system", agent.systemPrompt()))
+        _trace.value = emptyList()
+        _lastUserText.value = ""
+        streamBuffer.clear()
+        streamPacer.reset()
+        refreshSessions()
+    }
+
+    /** Swaps the visible conversation; the current one is saved first. */
+    fun switchSession(id: String) {
+        if (id == currentSessionId || _busy.value) return
+        stop()
+        persistNow()
+        currentSessionId = id
+        app.settings.setCurrentSessionId(id)
+        history.clear()
+        _trace.value = emptyList()
+        _lastUserText.value = ""
+        streamBuffer.clear()
+        streamPacer.reset()
+        loadSession(id)
+        refreshSessions()
+    }
+
+    fun deleteSession(id: String) {
+        stop()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { app.sessions.deleteSession(id) }
+            val list = runCatching { app.sessions.listSessions() }.getOrDefault(emptyList())
+            _sessionList.value = list
+            if (id == currentSessionId) {
+                // The visible session just vanished — open a new empty one so
+                // the screen never points at a deleted id.
+                withContext(Dispatchers.Main) { newSession() }
+            }
+        }
+    }
+
+    /** Storage-panel "clear all sessions": wipes every conversation, then opens a new one. */
+    fun deleteAllSessions() {
+        stop()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { app.sessions.deleteAll() }
+            _sessionList.value = emptyList()
+            withContext(Dispatchers.Main) { newSession() }
+        }
+    }
+
+    /**
+     * Renders the current session for the share sheet.
+     * @return (file stem, markdown), or null when there is nothing to export.
+     */
+    fun exportCurrentSession(): Pair<String, String>? {
+        val messages = history.filter { it.role != "system" }
+        if (messages.isEmpty()) return null
+        val now = System.currentTimeMillis()
+        val title = com.selfmod.agent.store.SessionStore.deriveTitle(history)
+        val md = com.selfmod.agent.store.SessionExporter.toMarkdown(title, messages, now)
+        return com.selfmod.agent.store.SessionExporter.fileStem(title, now) to md
+    }
+
+    /** Saves the current session without waiting for a run to finish. */
+    private fun persistNow() {
+        val snapshot = ArrayList(history)
+        if (snapshot.none { it.role != "system" }) return
+        val id = currentSessionId
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { app.sessions.saveSession(id, snapshot) }
+        }
+    }
+
+    /**
+     * Clears the current session's messages. The session row leaves the list
+     * (an empty conversation has nothing to come back to) but every *other*
+     * session is untouched — this is no longer a "delete all history" button.
+     */
     fun reset() {
         stop()
         history.clear()
@@ -202,10 +317,18 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         _lastUserText.value = ""
         streamBuffer.clear()
         streamPacer.reset()
-        runCatching { app.sessions.clear() }
+        val id = currentSessionId
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { app.sessions.deleteSession(id) }
+            val list = runCatching { app.sessions.listSessions() }.getOrDefault(emptyList())
+            _sessionList.value = list
+        }
     }
 
     fun config(): LlmConfig = app.settings.llmConfig()
+
+    /** Which session the drawer should highlight. */
+    fun activeSessionId(): String = currentSessionId
     fun setConfig(cfg: LlmConfig) {
         app.settings.setLlmConfig(cfg)
         history.removeAll { it.role == "system" }
@@ -591,8 +714,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearSession() {
-        runCatching { app.sessions.clear() }
-        _storageMsg.value = "已清空会话记录"
+        deleteAllSessions()
+        _storageMsg.value = "已清空全部会话记录"
     }
 
     /** Runs a minimal on-device inference and reports diagnostics. */
