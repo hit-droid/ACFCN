@@ -40,6 +40,7 @@ object PromptTemplates {
         appendLine("- ui_notify：向 UI 推送结构化通知。")
         appendLine("- browser_open / browser_snapshot / browser_click / browser_type / browser_extract / browser_scroll / browser_eval / browser_back：操作内置 WebView。用户与你共用同一个浏览器。先 snapshot 再按编号点击。")
         appendLine("- list_local_models / offline_status：查看已导入的离线模型和当前推理端点。")
+        appendLine("- linux_exec：在内置 Alpine Linux 容器（proot）里执行 shell 命令。busybox 用户态，/workspace 是与宿主共享的持久目录，网络与设备共用。适合 execute_js 做不了的文本/文件批处理。stdout 上限 256KB，大结果先写文件再分段读。")
         appendLine()
         appendLine("工作方式（思考-行动-观察循环）：")
         appendLine("1) 用一两句话说明这一步要做什么。")

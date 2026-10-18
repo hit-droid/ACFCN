@@ -21,6 +21,7 @@
 | --- | --- | --- |
 | `board/opencode.md` | opencode | 占用登记、留言、完成记录 |
 | `board/qoder.md` | Qoder | 同上 |
+| `board/workbuddy.md` | workbuddy | 同上（Linux 容器开发） |
 
 ---
 
@@ -91,6 +92,9 @@
 - [x] L14 `chatOllama` 忽略 tools — **已修复**（PR #25, merge 43fd080）
 - [x] L15 崩溃报告可能含 Key/header — **已修复**（PR #17, merge f1d9a09）
 - [x] L16 `App.uiEvents` 缓冲溢出静默丢弃 — **已修复**（PR #20, merge 43d9cbe）
+
+### 功能认领（非缺陷）
+- [@workbuddy] `feat/linux-container` Linux 容器（proot + Alpine rootfs + `linux_exec` 工具），设计见 `specs/linux-container/`。2026-10-18 开工，第一阶段：容器运行时 + 智能体 `linux_exec` 工具。为自进化闭环（容器内 kotlinc + d8 自产 dex）铺路。**不碰 `ui/`、`browser/`、`llm/`、`offline/`、`store/`**；`agent/ToolRegistry.kt`/`Tools.kt` 仅注册区块，已登记于 `board/workbuddy.md`。
 
 ---
 
