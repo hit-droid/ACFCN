@@ -9,6 +9,8 @@ import com.selfmod.agent.llm.ConnectionTester
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.offline.native.LocalLlmEngine
+import com.selfmod.agent.offline.native.MnnLlmEngine
+import com.selfmod.agent.offline.native.OnDeviceEngines
 import com.selfmod.agent.plugin.PluginRegistry
 import com.selfmod.agent.repo.CodeRepository
 import com.selfmod.agent.script.ScriptApi
@@ -107,6 +109,8 @@ class App : Application() {
     private var _tester: ConnectionTester? = null
     private var _sessions: SessionStore? = null
     private var _engine: LocalLlmEngine? = null
+    private var _mnnEngine: MnnLlmEngine? = null
+    private var _engines: OnDeviceEngines? = null
     private var _crashStore: CrashStore? = null
     private var _storage: StorageStats? = null
     private var _container: ContainerManager? = null
@@ -127,7 +131,11 @@ class App : Application() {
     val models: LocalModelStore get() = _models ?: fail("models")
     val tester: ConnectionTester get() = _tester ?: fail("tester")
     val sessions: SessionStore get() = _sessions ?: fail("sessions")
+    /** llama.cpp/GGUF engine. Kept for existing call sites; new code should use [engines]. */
     val engine: LocalLlmEngine get() = _engine ?: fail("engine")
+
+    /** Format-routed on-device engine pair (GGUF -> llama.cpp, MNN -> MNN). */
+    val engines: OnDeviceEngines get() = _engines ?: fail("engines")
     val crashStore: CrashStore get() = _crashStore ?: fail("crashStore")
     val storage: StorageStats get() = _storage ?: fail("storage")
     val container: ContainerManager get() = _container ?: fail("container")
@@ -193,7 +201,16 @@ class App : Application() {
             // SIGSEGV/SIGABRT/SIGBUS in llama.cpp still lands a report in the same
             // file MainActivity checks on next launch.
             runCatching { LocalLlmEngine.setNativeCrashDir(filesDir.absolutePath) }
-            _llmClient = LlmClient(onDevice = _engine!!)
+            // The MNN runtime is a second, independent .so set. Loading it is
+            // best-effort: if libacfcn_mnn.so is missing on a device, GGUF must
+            // keep working exactly as before.
+            runCatching { MnnLlmEngine.ensureLoaded() }
+                .onFailure { Log.w(TAG, "app_init mnn unavailable: ${it.message}") }
+            _mnnEngine = MnnLlmEngine()
+            _engines = OnDeviceEngines(_engine!!, _mnnEngine!!)
+            // The client sees whichever engine holds a model; loadOnDevice keeps
+            // both in step with the model's format.
+            _llmClient = LlmClient(onDevice = FormatRoutingEngine(_engines!!))
         }
     }
 

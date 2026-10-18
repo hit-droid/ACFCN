@@ -346,7 +346,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     val engineStatus: StateFlow<String> = _engineStatus.asStateFlow()
     private val _engineBusy = MutableStateFlow(false)
     val engineBusy: StateFlow<Boolean> = _engineBusy.asStateFlow()
-    private val _engineReady = MutableStateFlow(app.engine.isLoaded())
+    private val _engineReady = MutableStateFlow(app.engines.isLoaded())
     val engineReady: StateFlow<Boolean> = _engineReady.asStateFlow()
 
     private val _engineProgress = MutableStateFlow(-1f)
@@ -378,7 +378,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 "load", "开始加载 ${m.name} size=${m.sizeBytes / (1024 * 1024)}MB uri=${m.uri}",
             )
             try {
-                app.engine.unload()
+                app.engines.unloadAll()
                 _engineReady.value = false
 
                 // Pre-flight checks. IMPORTANT: llama.cpp uses *native* memory (mmap),
@@ -402,7 +402,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     "⚠ 内存偏紧（需约 ${estimateMb}MB，可用 ${ram.first}MB / 总 ${ram.second}MB），加载后可能卡顿。\n"
                 } else ""
 
-                _engineStatus.value = warn + "正在准备模型文件…"
+                _engineStatus.value = warn + if (m.format == "mnn") "正在解压 MNN 模型…" else "正在准备模型文件…"
                 val file = app.models.materialize(m.id) { progress ->
                     if (progress < 0f) {
                         _engineProgress.value = -1f
@@ -410,7 +410,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         _engineProgress.value = progress
                         val pct = (progress * 100).toInt().coerceIn(0, 100)
-                        _engineStatus.value = warn + "正在复制模型到 App 目录… $pct%"
+                        _engineStatus.value = warn + if (m.format == "mnn") "正在解压模型到 App 目录… $pct%" else "正在复制模型到 App 目录… $pct%"
                     }
                 } ?: run {
                     _engineStatus.value = "无法读取模型文件"
@@ -447,11 +447,16 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 com.selfmod.agent.util.Diagnostics.log(
                     "load", "ram=${ram.first}/${ram.second}MB ctx=$ctx nBatch=$nBatch nThreads=$nThreads",
                 )
-                val ok = app.engine.load(
-                    file,
+                // MNN keeps its own KV/weight layout; its chunk size is the
+                // prefill batch, and it does not benefit from llama's larger
+                // 12GB-tier batches (MNN manages OpenCL buffers itself).
+                val mnnBatch = if (nBatch > 128) 128 else nBatch
+                val ok = app.engines.load(
+                    model = m,
+                    path = file,
                     nCtx = ctx,
                     nThreads = nThreads,
-                    nBatch = nBatch,
+                    nBatch = if (m.format == "mnn") mnnBatch else nBatch,
                     onProgress = object : com.selfmod.agent.offline.native.OnDeviceEngine.LoadCallback {
                         override fun onProgress(progress: Float) {
                             _engineProgress.value = progress
@@ -476,7 +481,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     app.settings.setOfflineMode(true)
                     _offlineMode.value = true
                 } else {
-                    _engineStatus.value = "加载失败：模型格式不支持或内存不足（需 arm64 设备）"
+                    _engineStatus.value = "加载失败：${m.format.uppercase()} 模型不受支持或内存不足（端侧仅支持 GGUF / MNN，需 arm64 设备）"
                 }
             } catch (e: Throwable) {
                 _engineStatus.value = "加载异常：${e.message}"
@@ -505,7 +510,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun unloadOnDevice() {
         viewModelScope.launch(Dispatchers.IO) {
-            app.engine.unload()
+            app.engines.unloadAll()
             _engineReady.value = false
             _engineStatus.value = "已卸载端侧模型"
         }
@@ -571,7 +576,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val copied = app.models.list().count { app.models.localPathFor(it.id) != null }
                 val freed = app.storage.clearModelCopies()
-                app.engine.unload()
+                app.engines.unloadAll()
                 _engineReady.value = false
                 _engineStatus.value = ModelCopyWipe.AFTER_ENGINE
                 _engineProgress.value = -1f
@@ -602,30 +607,33 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             _selfTesting.value = true
             val sb = StringBuilder()
             try {
-                if (!app.engine.isLoaded()) {
+                if (!app.engines.isLoaded()) {
                     _selfTest.value = "未加载模型。请先在某个模型上点「在本机加载」。"
                     return@launch
                 }
                 sb.appendLine("引擎已加载 ✓")
-                sb.appendLine("chat 模板: ${app.engine.chatTemplate()}")
-                sb.appendLine("上下文: ${app.engine.contextSize()}")
+                sb.appendLine("chat 模板: ${app.engines.chatTemplate()}")
+                sb.appendLine("上下文: ${app.engines.contextSize()}")
                 sb.appendLine()
 
-                app.engine.clearAbort()
+                app.engines.clearAbort()
                 val t0 = System.currentTimeMillis()
                 val out = StringBuilder()
-                val code = app.engine.chatWithTimeout(
+                // Self-test goes through the shared contract, so it exercises
+                // whichever engine the loaded model selected.
+                val code = app.engines.active?.chat(
                     messages = listOf("user" to "Say hello in one short sentence."),
                     maxTokens = 24,
                     temperature = 0.2f,
-                    timeoutMs = 120_000,
+                    topK = 40,
+                    topP = 0.95f,
                     onToken = object : com.selfmod.agent.offline.native.OnDeviceEngine.TokenCallback {
                         override fun onToken(piece: String): Boolean {
                             out.append(piece)
                             return true
                         }
                     },
-                )
+                ) ?: -1
                 val dt = System.currentTimeMillis() - t0
                 sb.appendLine("推理返回码: $code")
                 sb.appendLine("耗时: ${dt}ms")
