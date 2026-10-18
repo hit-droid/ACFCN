@@ -106,7 +106,7 @@ fun AgentScreen(vm: AgentViewModel) {
         ChatTopBar(
             hint = endpointHint,
             busy = busy,
-            onClear = { vm.reset() },
+            onClear = { vm.clearCurrentSession() },
             onRetry = { vm.retryLast() },
             onOpenSessions = { showSessions = true },
         )

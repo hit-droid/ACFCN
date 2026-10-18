@@ -305,9 +305,11 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Clears the current session's messages. The session row leaves the list
-     * (an empty conversation has nothing to come back to) but every *other*
-     * session is untouched — this is no longer a "delete all history" button.
+     * Clears the in-memory conversation only. Safe to call from anywhere —
+     * nothing on disk is touched, so init (which runs right before
+     * [loadSession] restores the saved session) cannot wipe what it is about
+     * to restore. For the user-facing "清空" use [clearCurrentSession], which
+     * also drops the session file.
      */
     fun reset() {
         stop()
@@ -317,6 +319,16 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         _lastUserText.value = ""
         streamBuffer.clear()
         streamPacer.reset()
+    }
+
+    /**
+     * "清空" from the top bar: clears the visible conversation *and* removes
+     * the current session's file, so its row leaves the list (an empty
+     * conversation has nothing to come back to). Every *other* session is
+     * untouched — this is no longer a "delete all history" button.
+     */
+    fun clearCurrentSession() {
+        reset()
         val id = currentSessionId
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { app.sessions.deleteSession(id) }
