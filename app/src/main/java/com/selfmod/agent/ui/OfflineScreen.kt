@@ -180,7 +180,7 @@ fun OfflineScreen(vm: AgentViewModel) {
         Spacer(Modifier.height(4.dp))
         Text("端侧推理（App 内直接跑）", color = TextPrimary, style = MaterialTheme.typography.titleSmall)
         Text(
-            "把 GGUF 复制到 App 私有目录并用 llama.cpp 直接加载，无需任何外部服务。需 arm64 设备与足够内存。",
+            "GGUF 走 llama.cpp、MNN 模型走 MNN 引擎（OpenCL 加速），都在 App 内直接加载，无需外部服务。需 arm64 设备与足够内存。",
             color = TextSecondary,
             fontSize = 12.sp,
         )
@@ -244,10 +244,10 @@ fun OfflineScreen(vm: AgentViewModel) {
         Text("已导入模型", color = TextPrimary, style = MaterialTheme.typography.titleSmall)
         Button(onClick = {
             picker.launch(arrayOf("*/*"))
-        }) { Text("从文件导入 GGUF / ONNX") }
+        }) { Text("从文件导入 GGUF / MNN") }
 
         if (models.isEmpty()) {
-            Text("还没有导入模型。把 .gguf 拷到手机后点上方按钮选择即可。", color = TextSecondary, fontSize = 12.sp)
+            Text("还没有导入模型。把 .gguf 文件或 MNN 模型 zip 拷到手机后点上方按钮选择即可。", color = TextSecondary, fontSize = 12.sp)
         } else {
             models.forEach { m: LocalModel ->
                 Column(
