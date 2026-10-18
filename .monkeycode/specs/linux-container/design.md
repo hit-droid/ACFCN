@@ -20,24 +20,29 @@ Android 上无 root 运行 Linux 的方案对比：
 
 ```
 app/src/main/assets/linux/
-├── alpine-minirootfs-<ver>-aarch64.tar.gz   # ~3MB，sha256 锁定
-└── proot-aarch64                             # 静态 ELF 可执行文件（NDK 交叉编译）
+└── alpine-minirootfs-3.20.9-aarch64.tar.gz   # 3.9MB，sha256 锁定
+
+app/src/main/jniLibs/arm64-v8a/
+├── libproot.so              # proot 3.x 主程序（PIE，NDK 27 交叉编译，285KB）
+└── libproot-loader.so       # proot loader（静态 ELF，5.3KB，经 PROOT_LOADER 指定）
 
 app/src/main/java/com/selfmod/agent/container/
-├── ContainerRuntime.kt      # 单例：rootfs/proot 安装、版本校验、会话工厂
-├── RootfsInstaller.kt       # assets → filesDir/linux/ 解压与 chmod（首次启动/升级）
+├── ContainerManager.kt      # 生命周期：rootfs 安装状态机、会话工厂、取消联动
+├── RootfsInstaller.kt       # assets → filesDir/linux/ 解压与 sha256 校验（幂等）
 ├── ContainerSession.kt      # 一次命令执行：进程生命周期、管道、超时、取消
-└── ContainerPaths.kt        # 路径常量与 bind mount 白名单
+├── ContainerPaths.kt        # 路径常量；proot/loader 从 nativeLibraryDir 解析
+└── TarExtractor.kt          # 零依赖 tar 解析（ustar + GNU LongName，越界拒绝）
 ```
 
-**安装时机**：`App.initAll()` 中异步执行（解压 3MB 约 1-2s），完成后置 `containerReady`。智能体首次调用 `linux_exec` 时若未就绪则等待或返回"容器准备中"。
+**安装时机**：`App.onCreate()` 里 `initContainer()` 只构造 `ContainerManager`（零成本）；真正的 rootfs 解压发生在智能体首次调用 `linux_exec` 时（阻塞该次调用，约 1-2s），失败返回明确错误而不是拖垮启动。
+
+**proot 为什么在 jniLibs 而不是 assets**：Android 10（API 29）起平台拒绝 exec 应用私有可写目录里的文件（W^X 政策），`nativeLibraryDir`（APK 提取的原生库目录）是唯一被允许 exec 的例外，因此二进制必须以 `lib*.so` 命名经 jniLibs 分发，原地执行、不拷贝。
 
 **rootfs 布局**（app 私有目录，无外部存储权限也可用）：
 
 ```
 filesDir/linux/
-├── rootfs/            # Alpine 根（/bin, /usr, /etc, /workspace 由 bind 提供）
-├── bin/proot          # 755
+├── rootfs/            # Alpine 根（/bin, /usr, /etc；/workspace 由 bind 提供）
 └── workspace/         # 共享工作区：容器内 /workspace ↔ app filesDir/linux/workspace
 ```
 
@@ -48,11 +53,12 @@ filesDir/linux/
 ## 3. 命令执行（ContainerSession）
 
 ```
-proot -R rootfs -b workspace:/workspace --kill-on-exit /bin/sh -c "<command>"
+proot -R rootfs -b /proc -b /dev -b /sys -b workspace:/workspace --kill-on-exit --cwd=<cwd> /bin/sh -c "<command>"
 ```
 
 - `--kill-on-exit`：确保 sh 退出时子进程树被清理，防僵尸。
-- 通过 `ProcessBuilder` 启动，**不走 JNI**（proot 是普通可执行文件；exec 不受 app W^X 限制）。
+- 通过 `ProcessBuilder` 启动，**不走 JNI**。exec 目标为 `nativeLibraryDir/libproot.so`（APK 提取目录，W^X 政策下唯一可 exec 的位置）；loader 经 `PROOT_LOADER` 环境变量指定。
+- `/proc /dev /sys` 显式绑定：`-R` 的默认绑定集只含 etc 配置文件，缺了这三个 busybox 半数工具（ps、mount、/dev/urandom）不可用。
 - stdout/stderr 各起一个读取线程，累计上限 **256KB**（超出置 `truncated=true` 后继续排空管道防阻塞）。
 - 超时看门狗：`timeout_ms`（默认 60s，钳制上限 600s）到点先 `destroy()`，2s 宽限后 `destroyForcibly()`。
 - 取消：agent 停止按钮 → `cancel()` → 同上销毁流程；`destroyForcibly` 后 `waitFor` 收尸。
@@ -101,15 +107,16 @@ truncated: false
 - 防误伤设计：白名单 bind（只共享 `/workspace`）；默认 `--kill-on-exit`；超时强杀；`rm -rf /` 之类命令由模型自觉（工具层不解析命令语义，保持通用性）。
 - rootfs 完整性：assets 内 tarball 带 sha256 清单，安装时校验，失败则容器不可用并报诊断（与 L10 插件完整性校验同思路）。
 
-## 6. proot 二进制来源
+## 6. proot 二进制来源（已完成）
 
-首选 **NDK 源码静态编译**（可控、无外部运行时依赖）：
+**NDK 源码交叉编译**（可控、无外部运行时依赖），完整复现步骤见同目录 `build-proot.sh` 及 `build-proot.md`：
 
-- 源码：`https://github.com/termux/proot`（或 proot-devel 分支），依赖 talloc（一并静态编入）。
-- 用 NDK 27 standalone toolchain `./configure --host=aarch64-linux-android --static` 后 make。
-- 产物 `proot`（静态 ELF）→ `assets/linux/proot-aarch64`。
+- talloc 2.4.2（samba.org FTP 官方源，waf cross-answers 交叉配置）+ Termux proot 源码（含 ashmem_memfd.c 补丁）。
+- NDK 27 / API 26：talloc 静态编入 proot；产物依赖仅 `libc.so`/`libdl.so`（bionic 自带）。
+- 产物 `libproot.so`（285KB PIE）+ `libproot-loader.so`（5.3KB 静态）→ `app/src/main/jniLibs/arm64-v8a/`。
+- 名称必须是 `lib*.so`：Android 10+ 只允许 exec `nativeLibraryDir` 下的库文件（见 §2）。
 
-备选：Termux 包仓库预编译 `proot` + `libtalloc.so.2`（动态链接 bionic，需带依赖，作为 Plan B）。
+三个踩坑记录（`build-proot.md` 有详情）：系统 awk 需 gawk（`strtonum`）；GNUmakefile 的 `OBJIFY` 宏依赖 objdump 解析架构而 llvm-objdump 输出格式不同；`OBJCOPY/OBJDUMP` 必须显式指向 NDK llvm 工具，否则 make 落到系统 GNU binutils。
 
 ## 7. 兼容性与风险
 

@@ -2,6 +2,8 @@ package com.selfmod.agent.agent
 
 import com.selfmod.agent.browser.BrowserController
 import com.selfmod.agent.browser.BrowserOutcome
+import com.selfmod.agent.container.ContainerManager
+import com.selfmod.agent.container.ContainerSession
 import com.selfmod.agent.llm.ToolSpec
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.plugin.PluginRegistry
@@ -28,6 +30,7 @@ object Tools {
         uiNotifier: (String, String) -> Unit,
         browser: BrowserController,
         models: LocalModelStore,
+        containerManager: ContainerManager,
     ): List<ToolDef> = listOf(
         executeJs(scriptEngine, scriptHost),
         readScript(repo),
@@ -57,6 +60,7 @@ object Tools {
         browserBack(browser),
         listLocalModels(models),
         offlineStatus(settings),
+        linuxExec(containerManager),
     )
 
     // ----------------------------------------------------------------- JS
@@ -486,6 +490,46 @@ object Tools {
                 put("local", cfg.isLocalHost())
                 put("usable", cfg.isUsable())
             }.toString()
+        },
+    )
+
+    // ------------------------------------------------------- linux container
+
+    /**
+     * Shell access to the embedded Alpine container. First call triggers the
+     * one-time rootfs install (a few seconds), later calls reuse it. Output is
+     * capped — for big results write to a file under /workspace and read it
+     * back in slices.
+     */
+    private fun linuxExec(container: ContainerManager) = ToolDef(
+        spec = ToolSpec(
+            name = "linux_exec",
+            description = "Run a shell command in the embedded Alpine Linux 3.20 container (busybox userland; apk is present but no extra packages are pre-installed — no python3/gcc unless you install them via apk, which needs network). The container shares the device's network stack, so curl/wget reach the same hosts as the app. /workspace is a persistent directory shared with the host app — put working files there. stdout is capped (256KB) and stderr (64KB); prefer writing large output to files. Default timeout 60s, max 600s.",
+            parameters = """{"type":"object","properties":{"command":{"type":"string","description":"Shell command passed to /bin/sh -c"},"cwd":{"type":"string","description":"Working directory inside the container (default /workspace)"},"timeout_ms":{"type":"integer","description":"Hard timeout in milliseconds (1000..600000, default 60000)"},"env":{"type":"object","description":"Extra environment variables"}},"required":["command"]}""",
+        ),
+        run = { args ->
+            val o = JSONObject(args)
+            val command = o.optString("command").ifBlank { o.optString("input") }
+            if (command.isBlank()) {
+                ToolRegistry.errJson("command required")
+            } else {
+                val cwd = o.optString("cwd").ifBlank { ContainerSession.DEFAULT_CWD }
+                val timeoutMs = o.optLong("timeout_ms", ContainerSession.DEFAULT_TIMEOUT_MS)
+                val env = mutableMapOf<String, String>()
+                o.optJSONObject("env")?.let { e ->
+                    for (k in e.keys()) env[k] = e.optString(k)
+                }
+                val res = container.exec(command, cwd, timeoutMs, env)
+                val out = JSONObject()
+                out.put("ok", res.status == ContainerSession.Result.Status.OK && res.exitCode == 0)
+                out.put("status", res.status.name)
+                out.put("exit_code", res.exitCode)
+                out.put("stdout", res.stdout)
+                out.put("stderr", res.stderr)
+                out.put("truncated", res.truncated)
+                out.put("duration_ms", res.durationMs)
+                out.toString()
+            }
         },
     )
 }
