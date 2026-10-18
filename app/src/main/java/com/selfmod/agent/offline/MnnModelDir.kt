@@ -6,7 +6,7 @@ import org.json.JSONObject
  * Validates an MNN on-device model directory.
  *
  * An MNN LLM model is a *directory*, not a single file — unlike GGUF. The
- * official `taobao-mnn/*-MNN` repos ship:
+ * official taobao-mnn `*-MNN` repos ship:
  *
  * ```
  * config.json        -- LlmConfig: jinja chat_template, llm_model/llm_weight/
