@@ -151,6 +151,15 @@ struct Engine {
     int free_waiters = 0;
     jobject progressObj = nullptr;
     jmethodID progressMid = nullptr;
+    // Cross-turn KV continuation: the serialized prompt of the previous turn
+    // plus the tokens already decoded into the KV cache. Next turn re-decodes
+    // only the suffix after the common prefix (llama_batch_get_one with
+    // pos==nullptr appends at the sequence's current end), killing the
+    // linear first-token-time growth with conversation length. Cleared with
+    // the context in free_locked(); truncation to the actually committed
+    // prefix happens in generate_impl().
+    std::vector<llama_token> kv_tokens;
+    bool kv_valid = false;
 };
 
 Engine g_engine;
@@ -191,6 +200,9 @@ void free_locked() {
     if (g_engine.model) { llama_model_free(g_engine.model); g_engine.model = nullptr; }
     g_engine.vocab = nullptr;
     g_engine.ready.store(false);
+    g_engine.kv_valid = false;
+    g_engine.kv_tokens.clear();
+    g_engine.kv_tokens.shrink_to_fit();
 }
 
 void wait_idle_locked(std::unique_lock<std::mutex> &lock) {
@@ -524,6 +536,7 @@ static jint generate_impl(
     llama_context *ctx = nullptr;
     const llama_vocab *vocab = nullptr;
     int n_batch = 64;
+    std::vector<llama_token> prev_kv;   // committed prefix snapshot from last turn
     {
         std::unique_lock<std::mutex> lock(g_engine.mu);
         g_engine.cv.wait(lock, [] {
@@ -537,6 +550,7 @@ static jint generate_impl(
         ctx = g_engine.ctx;
         vocab = g_engine.vocab;
         n_batch = g_engine.n_batch > 0 ? g_engine.n_batch : 64;
+        prev_kv = g_engine.kv_valid ? g_engine.kv_tokens : std::vector<llama_token>();
     }
 
     struct InflightGuard {
@@ -606,7 +620,34 @@ static jint generate_impl(
         return -5;
     }
 
-    llama_memory_clear(llama_get_memory(ctx), true);
+    // --- KV continuation -------------------------------------------------
+    // Compare against the committed prefix of the previous turn and keep
+    // only the differing suffix to decode. This llama_batch_get_one() passes
+    // pos/seq = nullptr, so llama appends each chunk at the sequence's
+    // current end — after llama_memory_seq_rm() drops the stale tail the next
+    // chunk lands exactly at `common`. First-token time used to grow linearly
+    // with the conversation because we re-prefilled everything each turn.
+    llama_memory_t mem = llama_get_memory(ctx);
+    int common = 0;
+    bool kv_ok = true;
+    if (!prev_kv.empty()) {
+        const size_t max_cmp = std::min(prev_kv.size(), tokens.size());
+        while ((size_t) common < max_cmp && prev_kv[common] == tokens[common]) {
+            common++;
+        }
+        if (common >= (int) tokens.size()) common = (int) tokens.size() - 1;
+        if (common < 8) {
+            common = 0;
+        } else if (!llama_memory_seq_rm(mem, 0, common, -1)) {
+            LOGI("kv seq_rm failed; full prefill instead");
+            common = 0;
+        }
+    }
+    if (common > 0) {
+        LOGI("kv reuse: %d/%d prompt tokens already cached", common, (int) tokens.size());
+    } else {
+        llama_memory_clear(mem, true);
+    }
 
     llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
     llama_sampler *smpl = llama_sampler_chain_init(sparams);
@@ -619,9 +660,12 @@ static jint generate_impl(
     std::string piece_buf;
     jint result = 0;
     bool fail = false;
+    bool prefill_complete = false;
 
-    int pos = 0;
-    LOGI("prefill start: %d prompt tokens", (int) tokens.size());
+    std::vector<llama_token> gen_committed;   // reply ids actually decoded
+
+    int pos = common;
+    LOGI("prefill start: %d prompt tokens from pos %d", (int) tokens.size(), common);
     auto prefill_t0 = std::chrono::steady_clock::now();
     while (!fail && pos < (int) tokens.size()) {
         if (aborted()) {
@@ -633,34 +677,45 @@ static jint generate_impl(
         int chunk = std::min(n_batch, (int) tokens.size() - pos);
         llama_batch batch = llama_batch_get_one(tokens.data() + pos, chunk);
         int rc = llama_decode(ctx, batch);
-        if (rc == 2 || aborted()) {
+        if (rc == 2) {
             LOGI("prefill aborted by llama at pos %d rc=%d", pos, rc);
             result = -98;
+            kv_ok = false;   // partial-chunk commit state is unknowable
             fail = true;
+            break;
+        }
+        if (aborted()) {
+            LOGI("prefill cancelled at pos %d", pos);
+            result = -98;
+            fail = true;     // prefix tokens[0..pos) is fully committed
             break;
         }
         if (rc == 1) {
             LOGE("prompt needs more KV slots at pos %d (n_ctx=%d)", pos, ctx_size);
             result = -5;
+            kv_ok = false;
             fail = true;
             break;
         }
         if (rc != 0) {
             LOGE("prompt decode failed rc=%d", rc);
             result = -3;
+            kv_ok = false;
             fail = true;
             break;
         }
         pos += chunk;
     }
+    if (!fail) prefill_complete = true;
 
     if (!fail) {
         auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - prefill_t0).count();
+        int n_new = (int) tokens.size() - common;
         double prefill_tps = prefill_ms > 0
-                ? (double) tokens.size() * 1000.0 / (double) prefill_ms : 0.0;
-        LOGI("prefill done in %lld ms (%d tokens, %.2f tok/s)",
-             (long long) prefill_ms, (int) tokens.size(), prefill_tps);
+                ? (double) n_new * 1000.0 / (double) prefill_ms : 0.0;
+        LOGI("prefill done in %lld ms (%d new tokens, %.2f tok/s)",
+             (long long) prefill_ms, n_new, prefill_tps);
 
         auto decode_t0 = std::chrono::steady_clock::now();
         std::vector<char> buf(256);
@@ -700,8 +755,16 @@ static jint generate_impl(
 
             llama_batch next = llama_batch_get_one(&id, 1);
             int rc = llama_decode(ctx, next);
-            if (rc == 2 || aborted()) {
-                LOGI("decode aborted at token %d rc=%d", i, rc);
+            if (rc == 0) gen_committed.push_back(id);
+            if (rc == 2) {
+                LOGI("decode aborted mid-step at token %d rc=%d", i, rc);
+                result = -98;
+                kv_ok = false;
+                fail = true;
+                break;
+            }
+            if (aborted()) {
+                LOGI("generation cancelled at token %d", i);
                 result = -98;
                 fail = true;
                 break;
@@ -713,6 +776,7 @@ static jint generate_impl(
             }
             if (rc != 0) {
                 LOGE("decode failed at token %d rc=%d", i, rc);
+                kv_ok = false;
                 break;
             }
         }
@@ -723,6 +787,27 @@ static jint generate_impl(
         double decode_tps = decode_ms > 0 ? (double) emitted * 1000.0 / (double) decode_ms : 0.0;
         LOGI("decode done in %lld ms (%d tokens, %.2f tok/s)",
              (long long) decode_ms, emitted, decode_tps);
+    }
+
+    // Commit the KV state so the next turn can reuse this prefix.
+    {
+        std::lock_guard<std::mutex> lock(g_engine.mu);
+        if (g_engine.ctx == ctx && kv_ok) {
+            int keep = prefill_complete ? (int) tokens.size() : pos;
+            if (keep < 0) keep = 0;
+            if (keep > (int) tokens.size()) keep = (int) tokens.size();
+            std::vector<llama_token> saved;
+            saved.reserve(keep + (prefill_complete ? gen_committed.size() : 0));
+            saved.insert(saved.end(), tokens.begin(), tokens.begin() + keep);
+            if (prefill_complete) {
+                saved.insert(saved.end(), gen_committed.begin(), gen_committed.end());
+            }
+            g_engine.kv_tokens = std::move(saved);
+            g_engine.kv_valid = !g_engine.kv_tokens.empty();
+        } else {
+            g_engine.kv_tokens.clear();
+            g_engine.kv_valid = false;
+        }
     }
 
     llama_sampler_free(smpl);

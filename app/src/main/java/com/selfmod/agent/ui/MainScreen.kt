@@ -1,10 +1,19 @@
 package com.selfmod.agent.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
@@ -41,6 +50,7 @@ private val tabs = listOf(
     Tab("API", Icons.Filled.Settings),
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen(vm: AgentViewModel) {
     var tab by rememberSaveable { mutableStateOf(0) }
@@ -63,19 +73,31 @@ fun MainScreen(vm: AgentViewModel) {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                tabs.forEachIndexed { i, t ->
-                    NavigationBarItem(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        label = { Text(t.label, fontSize = 10.sp) },
-                        icon = { Icon(t.icon, contentDescription = null) },
-                    )
+            // While the IME is up the chat input needs the space the nav bar
+            // would take; the keyboard hides it, and lifting the content by ime
+            // height alone would leave the input stuck *behind* the keyboard.
+            AnimatedVisibility(
+                visible = !WindowInsets.isImeVisible,
+                enter = fadeIn() + slideInVertically { it },
+                exit = fadeOut() + slideOutVertically { it },
+            ) {
+                NavigationBar {
+                    tabs.forEachIndexed { i, t ->
+                        NavigationBarItem(
+                            selected = tab == i,
+                            onClick = { tab = i },
+                            label = { Text(t.label, fontSize = 10.sp) },
+                            icon = { Icon(t.icon, contentDescription = null) },
+                        )
+                    }
                 }
             }
         }
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        // imePadding lifts tab content above the soft keyboard; on Android 12+
+        // the nav bar can also appear as *inset* (gesture nav), so content must
+        // never assume the keyboard is the only bottom obstruction.
+        Column(Modifier.padding(padding).fillMaxSize().imePadding()) {
             if (showOnboarding && tab == 0) {
                 OnboardingCard(
                     onOpenApi = { tab = 5 },
