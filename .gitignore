@@ -32,4 +32,6 @@ app-debug.apk
 SelfModAgent-debug.apk
 
 # Generated OpenCL ICD loader (built by scripts/setup-opencl-ndk.sh)
-app/src/main/jniLibs/
+# Prebuilt OpenCL ICD loader (built by scripts/setup-opencl-ndk.sh)
+app/src/main/jniLibs/libOpenCL.so
+# MNN prebuilts under jniLibs/arm64-v8a/ are intentionally committed

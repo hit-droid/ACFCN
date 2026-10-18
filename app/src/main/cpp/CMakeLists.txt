@@ -69,3 +69,41 @@ target_link_libraries(acfcn_llm
     android
     log
 )
+
+# ---------------------------------------------------------------------------
+# MNN backend bridge (acfcn_mnn.so)
+#
+# Links against MNN 3.6.1's prebuilt Android .so files that ship in
+# app/src/main/jniLibs/arm64-v8a (libllm.so + libMNN*.so + libc++_shared.so).
+# No MNN source is compiled here: the official release libs already carry the
+# OpenCL/Vulkan backends tuned for Adreno, which is the whole point of this
+# path. The JNI bridge only implements the chat/load/abort contract.
+# ---------------------------------------------------------------------------
+
+# The prebuilt libs live next to CMakeLists under ../jniLibs/<abi>.
+set(ACFCN_MNN_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a)
+
+foreach(_lib libllm libMNN libMNN_Express)
+    add_library(${_lib} SHARED IMPORTED)
+    set_target_properties(${_lib} PROPERTIES
+        IMPORTED_LOCATION ${ACFCN_MNN_LIB_DIR}/${_lib}.so
+        IMPORTED_SONAME ${_lib}.so
+    )
+endforeach()
+
+add_library(acfcn_mnn SHARED
+    mnn_llm.cpp
+)
+
+target_include_directories(acfcn_mnn PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mnn/include
+)
+
+target_link_libraries(acfcn_mnn
+    libllm
+    libMNN
+    libMNN_Express
+    android
+    log
+)
