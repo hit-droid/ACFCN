@@ -134,6 +134,13 @@ class SettingsStore(context: Context) {
         prefs.edit().putBoolean(KEY_ONBOARDING, done).apply()
     }
 
+    /** Which session the chat screen reopens after a process death. */
+    fun currentSessionId(): String? = prefs.getString(KEY_CURRENT_SESSION, null)
+
+    fun setCurrentSessionId(id: String?) {
+        prefs.edit().putString(KEY_CURRENT_SESSION, id).apply()
+    }
+
     fun memoryGet(key: String): String? = prefs.getString("$MEM_PREFIX$key", null)
 
     fun memorySet(key: String, value: String) {
@@ -207,6 +214,7 @@ class SettingsStore(context: Context) {
         private const val KEY_ACTIVE = "llm_active_profile"
         private const val KEY_OFFLINE = "offline_mode_v1"
         private const val KEY_ONBOARDING = "onboarding_done_v1"
+        private const val KEY_CURRENT_SESSION = "current_session_v1"
         private const val MEM_PREFIX = "mem_"
     }
 }
