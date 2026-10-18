@@ -10,17 +10,13 @@ import java.io.File
  * Load a model once, then [generate] / [chat] stream decoded pieces through
  * [onToken]; return false from [onToken] to cancel generation.
  */
-class LocalLlmEngine {
+class LocalLlmEngine : OnDeviceEngine {
 
-    interface TokenCallback {
-        /** @return true to continue, false to stop generation. */
-        fun onToken(piece: String): Boolean
-    }
-
-    interface LoadCallback {
-        /** @param progress 0.0 .. 1.0 */
-        fun onProgress(progress: Float)
-    }
+    // Declared as nested interfaces (not typealiases — those cannot live in a
+    // class) that simply extend the shared contract, so existing call sites
+    // keep working while callers can also accept plain OnDeviceEngine.
+    interface TokenCallback : OnDeviceEngine.TokenCallback
+    interface LoadCallback : OnDeviceEngine.LoadCallback
 
     @Volatile
     private var loaded = false
@@ -31,7 +27,7 @@ class LocalLlmEngine {
     // `loaded` flag after an unload had freed the engine.
     private val lifecycle = EngineLifecycle(loadedSetter = { loaded = it })
 
-    fun isLoaded(): Boolean = loaded && ensureLoaded() && nativeIsReady()
+    override fun isLoaded(): Boolean = loaded && ensureLoaded() && nativeIsReady()
 
     /**
      * @param nCtx context window (tokens). Larger = more RAM. 1024 is safer on 6GB phones.
@@ -89,7 +85,7 @@ class LocalLlmEngine {
         }
     }
 
-    fun unload() {
+    override fun unload() {
         // withUnload: exclusive access + version bump, so an in-flight load's
         // late commit is suppressed; nativeFree itself waits for the native
         // mutex, i.e. a load in progress finishes first, then is freed.
@@ -101,19 +97,41 @@ class LocalLlmEngine {
     }
 
     /** Abort in-flight load or generate. Safe to call from any thread. */
-    fun cancel() {
+    override fun cancel() {
         if (!ensureLoaded()) return
         nativeCancel()
     }
 
     /** Drop a leftover abort so the next request can start. */
-    fun clearAbort() {
+    override fun clearAbort() {
         if (!ensureLoaded()) return
         nativeClearAbort()
     }
 
     /** Chat completion using the model's built-in chat template. */
-    fun chat(
+    override fun chat(
+        messages: List<Pair<String, String>>,
+        maxTokens: Int,
+        temperature: Float,
+        topK: Int,
+        topP: Float,
+        onToken: TokenCallback?,
+    ): Int = chatWithTimeout(
+        messages = messages,
+        maxTokens = maxTokens,
+        temperature = temperature,
+        topK = topK,
+        topP = topP,
+        onToken = onToken,
+        timeoutMs = 120_000,
+    )
+
+    /**
+     * Same as [chat] but with an explicit idle timeout. Kept as a separate
+     * entry point because the [OnDeviceEngine.chat] contract has no timeout
+     * parameter, yet the offline self-test and the agent loop want to control it.
+     */
+    fun chatWithTimeout(
         messages: List<Pair<String, String>>,
         maxTokens: Int = 512,
         temperature: Float = 0.7f,
@@ -175,10 +193,10 @@ class LocalLlmEngine {
         return code
     }
 
-    fun contextSize(): Int = nativeContextSize()
+    override fun contextSize(): Int = nativeContextSize()
 
     /** The chat template the model reports (falls back to "chatml"). */
-    fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
+    override fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
 
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
@@ -203,7 +221,7 @@ class LocalLlmEngine {
     ): Int
     private external fun nativeChatTemplate(): String
     private external fun nativeContextSize(): Int
-    fun lastChatStats(): String =
+    override fun lastChatStats(): String =
         if (loaded) runCatching { nativeLastChatStats() }.getOrDefault("") else ""
 
     private external fun nativeLastGpuLayers(): Int

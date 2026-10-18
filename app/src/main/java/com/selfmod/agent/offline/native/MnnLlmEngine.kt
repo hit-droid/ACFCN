@@ -9,20 +9,15 @@ import java.io.File
  * Mirrors [LocalLlmEngine] so the app layer can hold either engine behind the
  * same chat()/cancel()/load() contract.
  */
-class MnnLlmEngine {
+class MnnLlmEngine : OnDeviceEngine {
 
-    interface TokenCallback {
-        fun onToken(piece: String): Boolean
-    }
-
-    interface LoadCallback {
-        fun onProgress(progress: Float)
-    }
+    interface TokenCallback : OnDeviceEngine.TokenCallback
+    interface LoadCallback : OnDeviceEngine.LoadCallback
 
     @Volatile
     private var loaded = false
 
-    fun isLoaded(): Boolean = loaded && ensureLoaded() && nativeIsReady()
+    override fun isLoaded(): Boolean = loaded && ensureLoaded() && nativeIsReady()
 
     /**
      * @param modelDir a directory containing config.json + llm.mnn + llm.mnn.weight +
@@ -66,19 +61,30 @@ class MnnLlmEngine {
         return ok
     }
 
-    fun unload() {
+    override fun unload() {
         if (!ensureLoaded()) return
+        // Signal first so an in-flight decode unwinds at its next step, then
+        // free. nativeFree() refuses while a generation is in flight, so retry
+        // briefly rather than leaving a multi-hundred-MB model resident.
         nativeCancel()
-        nativeFree()
+        repeat(20) {
+            nativeFree()
+            if (!nativeIsReady()) {
+                loaded = false
+                return
+            }
+            Thread.sleep(100)
+        }
         loaded = false
+        com.selfmod.agent.util.Diagnostics.log("mnn", "unload: 生成未在超时内结束，模型仍驻留")
     }
 
-    fun cancel() {
+    override fun cancel() {
         if (!ensureLoaded()) return
         nativeCancel()
     }
 
-    fun clearAbort() {
+    override fun clearAbort() {
         if (!ensureLoaded()) return
         nativeClearAbort()
     }
@@ -86,15 +92,15 @@ class MnnLlmEngine {
     /**
      * @param messages (role, content) pairs; MNN applies the jinja chat_template from
      *                 config.json internally, so no template folding happens here.
-     * @return the number of generated tokens, or -1 (engine missing), -98 (user cancel).
+     * @return generated token count, or -1 (not loaded) / -98 (cancelled).
      */
-    fun chat(
+    override fun chat(
         messages: List<Pair<String, String>>,
-        maxTokens: Int = 512,
-        temperature: Float = 0.7f,
-        topK: Int = 40,
-        topP: Float = 0.95f,
-        onToken: TokenCallback? = null,
+        maxTokens: Int,
+        temperature: Float,
+        topK: Int,
+        topP: Float,
+        onToken: TokenCallback?,
     ): Int {
         if (!isLoaded()) {
             com.selfmod.agent.util.Diagnostics.log("mnn", "chat: 未加载")
@@ -106,18 +112,41 @@ class MnnLlmEngine {
             "mnn",
             "chat: msgs=${messages.size} maxTokens=$maxTokens temp=$temperature topK=$topK",
         )
+        val first = java.util.concurrent.atomic.AtomicBoolean(true)
+        val t0 = System.currentTimeMillis()
+        val lastTokenAt = java.util.concurrent.atomic.AtomicLong(t0)
+        val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val emitted = java.util.concurrent.atomic.AtomicInteger(0)
+        val firstTokenAt = java.util.concurrent.atomic.AtomicLong(0L)
         val wrapped = object : TokenCallback {
-            override fun onToken(piece: String): Boolean = onToken?.onToken(piece) ?: true
+            override fun onToken(piece: String): Boolean {
+                if (aborted.get()) return false
+                lastTokenAt.set(System.currentTimeMillis())
+                emitted.incrementAndGet()
+                if (first.compareAndSet(true, false)) {
+                    val now = System.currentTimeMillis()
+                    firstTokenAt.set(now)
+                    com.selfmod.agent.util.Diagnostics.log("mnn", "chat: 首 token 耗时 ${now - t0}ms")
+                }
+                return onToken?.onToken(piece) ?: true
+            }
         }
-        val code = nativeChat(roles, contents, maxTokens, temperature, topK, topP, wrapped)
-        val totalMs = ""
-        com.selfmod.agent.util.Diagnostics.log("mnn", "chat: 返回 $code")
+        // MNN has no native USER_CANCEL; the abort flag is polled between
+        // decode steps natively, and the watchdog aborts through nativeCancel().
+        val code = IdleWatchdog.run(120_000, lastTokenAt, aborted, { nativeCancel() }) {
+            nativeChat(roles, contents, maxTokens, temperature, topK, topP, wrapped)
+        }
+        val n = emitted.get()
+        com.selfmod.agent.util.Diagnostics.log(
+            "mnn", "chat: 返回 $code，总耗时 ${System.currentTimeMillis() - t0}ms，输出 $n 段",
+        )
         return code
     }
 
-    fun contextSize(): Int = nativeContextSize()
-    fun chatTemplate(): String = nativeChatTemplate()
-    fun lastChatStats(): String = if (loaded) runCatching { nativeLastChatStats() }.getOrDefault("") else ""
+    override fun contextSize(): Int = nativeContextSize()
+    override fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
+    override fun lastChatStats(): String =
+        if (loaded) runCatching { nativeLastChatStats() }.getOrDefault("") else ""
 
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()

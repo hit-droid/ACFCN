@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -171,6 +172,15 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeFree(
         JNIEnv * /*env*/, jobject /*thiz*/) {
     std::lock_guard<std::mutex> lock(g_engine.mu);
+    // Refuse to tear the engine down underneath a running generation: chat
+    // checks the abort flag between decode steps, so signpost it and let the
+    // caller retry once it has unwound instead of freeing live state.
+    if (g_engine.inflight > 0) {
+        LOGE("mnn free: %d generation(s) in flight, aborting them first",
+             g_engine.inflight);
+        g_engine.abort_flag.store(true);
+        return;
+    }
     if (g_engine.llm) {
         Llm::destroy(g_engine.llm);
         g_engine.llm = nullptr;
@@ -221,15 +231,28 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
         JNIEnv *env, jobject, jstring /*template*/, jobjectArray roles,
         jobjectArray contents, jint maxTokens, jfloat temperature, jint topK,
         jfloat topP, jobject callback) {
-    std::lock_guard<std::mutex> lock(g_engine.mu);
-    Llm *llm = g_engine.llm;
-    if (llm == nullptr || !g_engine.ready.load()) {
-        LOGE("mnn chat called before init");
-        return -1;
+    Llm *llm = nullptr;
+    {
+        // Hold the engine mutex only long enough to check readiness and mark an
+        // in-flight call. nativeFree() takes the same mutex, so keeping it for
+        // the whole generation would deadlock an unload against a running chat.
+        std::lock_guard<std::mutex> lock(g_engine.mu);
+        llm = g_engine.llm;
+        if (llm == nullptr || !g_engine.ready.load()) {
+            LOGE("mnn chat called before init");
+            return -1;
+        }
+        g_engine.inflight++;
+        // Drop any leftover abort so this request actually starts.
+        g_engine.abort_flag.store(false);
     }
-    g_engine.inflight++;
-    // Drop any leftover abort so this request actually starts.
-    g_engine.abort_flag.store(false);
+    // Always release the in-flight marker, whichever way we leave.
+    struct InflightGuard {
+        ~InflightGuard() {
+            std::lock_guard<std::mutex> lock(g_engine.mu);
+            if (g_engine.inflight > 0) g_engine.inflight--;
+        }
+    } inflight_guard;
 
     jsize n = env->GetArrayLength(roles);
     ChatMessages msgs;
@@ -332,6 +355,5 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
         g_engine.last_stats = stats;
     }
 
-    g_engine.inflight--;
     return stop_code;
 }

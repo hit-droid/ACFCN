@@ -1,7 +1,7 @@
 package com.selfmod.agent.llm
 
 import com.selfmod.agent.offline.ContextBudget
-import com.selfmod.agent.offline.native.LocalLlmEngine
+import com.selfmod.agent.offline.native.OnDeviceEngine
 import com.selfmod.agent.util.Diagnostics
 import com.selfmod.agent.util.JsonUtil
 import okhttp3.Call
@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 class LlmClient(
     private val client: OkHttpClient = defaultClient(),
-    private val onDevice: LocalLlmEngine? = null,
+    private val onDevice: OnDeviceEngine? = null,
 ) {
     private val json = "application/json; charset=utf-8".toMediaType()
     private val inFlight = AtomicReference<Call?>(null)
@@ -90,7 +90,7 @@ class LlmClient(
             messages = pairs,
             maxTokens = config.maxTokens,
             temperature = config.temperature.toFloat(),
-            onToken = object : LocalLlmEngine.TokenCallback {
+            onToken = object : OnDeviceEngine.TokenCallback {
                 override fun onToken(piece: String): Boolean {
                     sb.append(piece)
                     onDelta?.invoke(piece)

@@ -452,7 +452,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     nCtx = ctx,
                     nThreads = nThreads,
                     nBatch = nBatch,
-                    onProgress = object : com.selfmod.agent.offline.native.LocalLlmEngine.LoadCallback {
+                    onProgress = object : com.selfmod.agent.offline.native.OnDeviceEngine.LoadCallback {
                         override fun onProgress(progress: Float) {
                             _engineProgress.value = progress
                             val pct = (progress * 100).toInt().coerceIn(0, 100)
@@ -614,12 +614,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 app.engine.clearAbort()
                 val t0 = System.currentTimeMillis()
                 val out = StringBuilder()
-                val code = app.engine.chat(
+                val code = app.engine.chatWithTimeout(
                     messages = listOf("user" to "Say hello in one short sentence."),
                     maxTokens = 24,
                     temperature = 0.2f,
                     timeoutMs = 120_000,
-                    onToken = object : com.selfmod.agent.offline.native.LocalLlmEngine.TokenCallback {
+                    onToken = object : com.selfmod.agent.offline.native.OnDeviceEngine.TokenCallback {
                         override fun onToken(piece: String): Boolean {
                             out.append(piece)
                             return true
