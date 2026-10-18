@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.selfmod.agent.agent.AgentCore
 import com.selfmod.agent.browser.BrowserController
+import com.selfmod.agent.container.ContainerManager
 import com.selfmod.agent.llm.ConnectionTester
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.offline.LocalModelStore
@@ -108,6 +109,7 @@ class App : Application() {
     private var _engine: LocalLlmEngine? = null
     private var _crashStore: CrashStore? = null
     private var _storage: StorageStats? = null
+    private var _container: ContainerManager? = null
 
     // uiQueue is constructed eagerly and never fails in practice; guarded by a
     // nullable indirection so a future failure path can't take down every collector.
@@ -128,6 +130,7 @@ class App : Application() {
     val engine: LocalLlmEngine get() = _engine ?: fail("engine")
     val crashStore: CrashStore get() = _crashStore ?: fail("crashStore")
     val storage: StorageStats get() = _storage ?: fail("storage")
+    val container: ContainerManager get() = _container ?: fail("container")
 
     /** Names of features whose init block threw; surfaced by `AgentViewModel` to
      *  show the user what's broken instead of letting them tap a tab that crashes. */
@@ -152,6 +155,7 @@ class App : Application() {
         initEngine()
         initScripts()
         initBrowser()
+        initContainer()
         initAgent()
     }
 
@@ -205,13 +209,21 @@ class App : Application() {
         }
     }
 
+    private fun initContainer() {
+        // Construction only records the Context — the rootfs is installed lazily
+        // on the first linux_exec call, so a broken asset can never block startup.
+        runFeature("container") {
+            _container = ContainerManager(this)
+        }
+    }
+
     private fun initAgent() {
         // The agent depends on every preceding slot. If any dependency is null we
         // treat that as a hard skip — the user will see "agent unavailable" rather
         // than a half-built AgentCore that crashes on its first tool call.
         if (_settings == null || _repo == null || _plugins == null ||
             _llmClient == null || _scriptEngine == null || _browser == null ||
-            _models == null
+            _models == null || _container == null
         ) {
             Log.w(TAG, "app_init agent skipped — missing dependency")
             _failedFeatures.add("agent")
@@ -236,6 +248,7 @@ class App : Application() {
                 uiNotifier = uiNotifier,
                 browser = _browser!!,
                 models = _models!!,
+                container = _container!!,
             )
         }
     }

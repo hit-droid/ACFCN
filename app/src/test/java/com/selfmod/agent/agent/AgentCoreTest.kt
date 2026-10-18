@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.selfmod.agent.browser.BrowserController
+import com.selfmod.agent.container.ContainerManager
 import com.selfmod.agent.llm.ChatMessage
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.llm.LlmConfig
@@ -146,6 +147,7 @@ class AgentCoreTest {
             uiNotifier = { a, p -> uiEvents += a to p },
             browser = BrowserController(),
             models = LocalModelStore(app),
+            container = ContainerManager(app),
         )
         steps.clear(); uiEvents.clear(); calls = 0; cancelOnRequest = false; failNextWith = 0
         responses = mutableListOf()
