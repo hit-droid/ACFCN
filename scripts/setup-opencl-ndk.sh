@@ -131,7 +131,6 @@ fi
 JNI_LIBS_DIR="$REPO_ROOT/app/src/main/jniLibs/$ABI"
 mkdir -p "$JNI_LIBS_DIR"
 "$CLANG" --target="${ANDROID_ABI_TRIPLE}${ANDROID_PLATFORM}" \
-  -gcc-toolchain "$NDK/toolchains/llvm/prebuilt/$HOST_TAG" \
   --sysroot="$SYSROOT" \
   -shared -fPIC -O2 -DNDEBUG \
   -I "$SYSROOT/usr/include" \
