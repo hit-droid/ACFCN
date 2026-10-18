@@ -12,12 +12,6 @@ import java.io.File
  */
 class LocalLlmEngine : OnDeviceEngine {
 
-    // Declared as nested interfaces (not typealiases — those cannot live in a
-    // class) that simply extend the shared contract, so existing call sites
-    // keep working while callers can also accept plain OnDeviceEngine.
-    interface TokenCallback : OnDeviceEngine.TokenCallback
-    interface LoadCallback : OnDeviceEngine.LoadCallback
-
     @Volatile
     private var loaded = false
 
@@ -40,7 +34,7 @@ class LocalLlmEngine : OnDeviceEngine {
         nCtx: Int = 1024,
         nThreads: Int = 0,
         nBatch: Int = 64,
-        onProgress: LoadCallback? = null,
+        onProgress: OnDeviceEngine.LoadCallback? = null,
     ): Boolean {
         val token = lifecycle.beginLoad() ?: run {
             com.selfmod.agent.util.Diagnostics.log("engine", "load: 已有加载在进行，忽略本次请求")
@@ -115,7 +109,7 @@ class LocalLlmEngine : OnDeviceEngine {
         temperature: Float,
         topK: Int,
         topP: Float,
-        onToken: TokenCallback?,
+        onToken: OnDeviceEngine.TokenCallback?,
     ): Int = chatWithTimeout(
         messages = messages,
         maxTokens = maxTokens,
@@ -137,7 +131,7 @@ class LocalLlmEngine : OnDeviceEngine {
         temperature: Float = 0.7f,
         topK: Int = 40,
         topP: Float = 0.95f,
-        onToken: TokenCallback? = null,
+        onToken: OnDeviceEngine.TokenCallback? = null,
         timeoutMs: Long = 120_000,
     ): Int {
         if (!isLoaded()) {
@@ -159,7 +153,7 @@ class LocalLlmEngine : OnDeviceEngine {
         val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
         val emitted = java.util.concurrent.atomic.AtomicInteger(0)
         val firstTokenAt = java.util.concurrent.atomic.AtomicLong(0L)
-        val wrapped = object : TokenCallback {
+        val wrapped = object : OnDeviceEngine.TokenCallback {
             override fun onToken(piece: String): Boolean {
                 if (aborted.get()) return false
                 lastTokenAt.set(System.currentTimeMillis())
@@ -208,7 +202,7 @@ class LocalLlmEngine : OnDeviceEngine {
         nCtx: Int,
         nThreads: Int,
         nBatch: Int,
-        progressCallback: LoadCallback?,
+        progressCallback: OnDeviceEngine.LoadCallback?,
     ): Boolean
     private external fun nativeFree()
     private external fun nativeCancel()
@@ -217,7 +211,7 @@ class LocalLlmEngine : OnDeviceEngine {
     private external fun nativeChat(
         template: String, roles: Array<String>, contents: Array<String>,
         maxTokens: Int, temperature: Float, topK: Int, topP: Float,
-        callback: TokenCallback?,
+        callback: OnDeviceEngine.TokenCallback?,
     ): Int
     private external fun nativeChatTemplate(): String
     private external fun nativeContextSize(): Int

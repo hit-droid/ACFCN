@@ -11,9 +11,6 @@ import java.io.File
  */
 class MnnLlmEngine : OnDeviceEngine {
 
-    interface TokenCallback : OnDeviceEngine.TokenCallback
-    interface LoadCallback : OnDeviceEngine.LoadCallback
-
     @Volatile
     private var loaded = false
 
@@ -28,7 +25,7 @@ class MnnLlmEngine : OnDeviceEngine {
         nCtx: Int = 2048,
         nThreads: Int = 0,
         nBatch: Int = 128,
-        onProgress: LoadCallback? = null,
+        onProgress: OnDeviceEngine.LoadCallback? = null,
     ): Boolean {
         if (!ensureLoaded()) {
             com.selfmod.agent.util.Diagnostics.log("mnn", "load: native 库不可用")
@@ -100,7 +97,7 @@ class MnnLlmEngine : OnDeviceEngine {
         temperature: Float,
         topK: Int,
         topP: Float,
-        onToken: TokenCallback?,
+        onToken: OnDeviceEngine.TokenCallback?,
     ): Int {
         if (!isLoaded()) {
             com.selfmod.agent.util.Diagnostics.log("mnn", "chat: 未加载")
@@ -118,7 +115,7 @@ class MnnLlmEngine : OnDeviceEngine {
         val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
         val emitted = java.util.concurrent.atomic.AtomicInteger(0)
         val firstTokenAt = java.util.concurrent.atomic.AtomicLong(0L)
-        val wrapped = object : TokenCallback {
+        val wrapped = object : OnDeviceEngine.TokenCallback {
             override fun onToken(piece: String): Boolean {
                 if (aborted.get()) return false
                 lastTokenAt.set(System.currentTimeMillis())
@@ -155,7 +152,7 @@ class MnnLlmEngine : OnDeviceEngine {
 
     private external fun nativeInit(
         modelDir: String, nCtx: Int, nThreads: Int, nBatch: Int,
-        progressCallback: LoadCallback?,
+        progressCallback: OnDeviceEngine.LoadCallback?,
     ): Boolean
     private external fun nativeFree()
     private external fun nativeCancel()
@@ -164,7 +161,7 @@ class MnnLlmEngine : OnDeviceEngine {
     private external fun nativeChat(
         roles: Array<String>, contents: Array<String>,
         maxTokens: Int, temperature: Float, topK: Int, topP: Float,
-        callback: TokenCallback?,
+        callback: OnDeviceEngine.TokenCallback?,
     ): Int
     private external fun nativeChatTemplate(): String
     private external fun nativeContextSize(): Int
