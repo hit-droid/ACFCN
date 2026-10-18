@@ -228,7 +228,7 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeLastChatStats(
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
-        JNIEnv *env, jobject, jstring /*template*/, jobjectArray roles,
+        JNIEnv *env, jobject, jobjectArray roles,
         jobjectArray contents, jint maxTokens, jfloat temperature, jint topK,
         jfloat topP, jobject callback) {
     Llm *llm = nullptr;
