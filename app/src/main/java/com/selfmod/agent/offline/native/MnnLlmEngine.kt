@@ -14,6 +14,13 @@ class MnnLlmEngine : OnDeviceEngine {
     @Volatile
     private var loaded = false
 
+    // Same single-flight gate as LocalLlmEngine (M13): loading a multi-GB MNN
+    // model twice in a row used to let the second load free the first's engine
+    // right after it reported success, and an interleaved unload could commit a
+    // stale `loaded=true`. The gate rejects overlapping loads and version-guards
+    // the flag commit.
+    private val lifecycle = EngineLifecycle(loadedSetter = { loaded = it })
+
     override fun isLoaded(): Boolean = loaded && ensureLoaded() && nativeIsReady()
 
     /**
@@ -27,53 +34,67 @@ class MnnLlmEngine : OnDeviceEngine {
         nBatch: Int = 128,
         onProgress: OnDeviceEngine.LoadCallback? = null,
     ): Boolean {
-        if (!ensureLoaded()) {
-            com.selfmod.agent.util.Diagnostics.log("mnn", "load: native 库不可用")
+        val token = lifecycle.beginLoad() ?: run {
+            com.selfmod.agent.util.Diagnostics.log("mnn", "load: 已有加载在进行，忽略本次请求")
             return false
         }
-        val cfg = modelDir.resolve("config.json").takeIf { it.exists() }
-            ?: modelDir.resolve("llm_config.json")
-        if (!cfg.exists()) {
-            com.selfmod.agent.util.Diagnostics.log("mnn", "load: 找不到 config.json / llm_config.json 于 ${modelDir.absolutePath}")
-            return false
+        var attempted = false
+        var ok = false
+        try {
+            if (!ensureLoaded()) {
+                com.selfmod.agent.util.Diagnostics.log("mnn", "load: native 库不可用")
+                return false
+            }
+            val cfg = modelDir.resolve("config.json").takeIf { it.exists() }
+                ?: modelDir.resolve("llm_config.json")
+            if (!cfg.exists()) {
+                com.selfmod.agent.util.Diagnostics.log(
+                    "mnn", "load: 找不到 config.json / llm_config.json 于 ${modelDir.absolutePath}",
+                )
+                return false
+            }
+            val threads = if (nThreads > 0) nThreads else defaultThreads()
+            com.selfmod.agent.util.Diagnostics.log(
+                "mnn",
+                "load: ${modelDir.name} ctx=$nCtx nBatch=$nBatch threads=$threads",
+            )
+            onProgress?.onProgress(0.1f)
+            val t0 = System.currentTimeMillis()
+            attempted = true
+            ok = nativeInit(modelDir.absolutePath, nCtx, threads, nBatch, onProgress)
+            com.selfmod.agent.util.Diagnostics.log(
+                "mnn", "load 返回 $ok，耗时 ${System.currentTimeMillis() - t0}ms",
+            )
+            if (ok) {
+                runCatching { nativeLoadInfo() }
+                    .getOrDefault("")
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .forEach { com.selfmod.agent.util.Diagnostics.log("mnn", it) }
+            }
+            return ok
+        } finally {
+            lifecycle.endLoad(token, ok, attempted)
         }
-        val threads = if (nThreads > 0) nThreads else defaultThreads()
-        com.selfmod.agent.util.Diagnostics.log(
-            "mnn",
-            "load: ${modelDir.name} ctx=$nCtx nBatch=$nBatch threads=$threads",
-        )
-        onProgress?.onProgress(0.1f)
-        val t0 = System.currentTimeMillis()
-        val ok = nativeInit(modelDir.absolutePath, nCtx, threads, nBatch, onProgress)
-        com.selfmod.agent.util.Diagnostics.log(
-            "mnn", "load 返回 $ok，耗时 ${System.currentTimeMillis() - t0}ms",
-        )
-        if (ok) loaded = true
-        runCatching { nativeLoadInfo() }
-            .getOrDefault("")
-            .lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .forEach { com.selfmod.agent.util.Diagnostics.log("mnn", it) }
-        return ok
     }
 
     override fun unload() {
-        if (!ensureLoaded()) return
-        // Signal first so an in-flight decode unwinds at its next step, then
-        // free. nativeFree() refuses while a generation is in flight, so retry
-        // briefly rather than leaving a multi-hundred-MB model resident.
-        nativeCancel()
-        repeat(20) {
-            nativeFree()
-            if (!nativeIsReady()) {
-                loaded = false
-                return
+        // withUnload bumps the generation so a load that finishes after this
+        // point cannot commit loaded=true, and always ends unloaded.
+        lifecycle.withUnload {
+            if (!ensureLoaded()) return@withUnload
+            // Signal first so an in-flight decode unwinds at its next step, then
+            // free. nativeFree() refuses while a generation is in flight, so
+            // retry briefly rather than leaving a multi-hundred-MB model resident.
+            nativeCancel()
+            repeat(20) {
+                nativeFree()
+                if (!nativeIsReady()) return@withUnload
+                Thread.sleep(100)
             }
-            Thread.sleep(100)
+            com.selfmod.agent.util.Diagnostics.log("mnn", "unload: 生成未在超时内结束，模型仍驻留")
         }
-        loaded = false
-        com.selfmod.agent.util.Diagnostics.log("mnn", "unload: 生成未在超时内结束，模型仍驻留")
     }
 
     override fun cancel() {
