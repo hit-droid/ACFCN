@@ -612,8 +612,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 sb.appendLine("引擎已加载 ✓")
-                sb.appendLine("chat 模板: ${app.engines.chatTemplate()}")
-                sb.appendLine("上下文: ${app.engines.contextSize()}")
+                sb.appendLine("chat 模板: ${app.engines.active?.chatTemplate().orEmpty()}")
+                sb.appendLine("上下文: ${app.engines.active?.contextSize() ?: 0}")
                 sb.appendLine()
 
                 app.engines.clearAbort()

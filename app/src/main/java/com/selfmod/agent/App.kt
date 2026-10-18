@@ -11,6 +11,7 @@ import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.offline.native.LocalLlmEngine
 import com.selfmod.agent.offline.native.MnnLlmEngine
 import com.selfmod.agent.offline.native.OnDeviceEngines
+import com.selfmod.agent.offline.native.FormatRoutingEngine
 import com.selfmod.agent.plugin.PluginRegistry
 import com.selfmod.agent.repo.CodeRepository
 import com.selfmod.agent.script.ScriptApi

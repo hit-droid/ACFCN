@@ -18,6 +18,10 @@
 - [ ] 真机 5 项集成验证（见 design.md §8）
 - [ ] 第二阶段：按需资源包（python → gcc → JDK+kotlinc+d8）dex 自产闭环
 
+## 跨域接手（opencode 移交）
+
+- [x] **MNN 双引擎后端编译验证完成**（接手 opencode 的 `261018-feat-mnn-backend` WIP）。opencode 沙箱无 NDK 从没编译过，我手上有 NDK 27 收尾：修 3 处编译错误（①`MnnModelDir.kt` 注释里 `taobao-mnn/*-MNN` 的 `/*` 被词法当作开注释导致整文件 Unclosed comment；②`App.kt` 缺 `import FormatRoutingEngine`；③`AgentViewModel.kt` 直接调 `app.engines.chatTemplate()/contextSize()` 而 `OnDeviceEngines` 无此方法、须经 `.active?`）。修复后 `externalNativeBuildDebug` + `assembleDebug` 全绿，APK 48MB 含全套 MNN 预编译库（libMNN/libMNN_CL/libMNN_Vulkan/libllm…）+ `libacfcn_mnn.so` + llama 桥；JVM 单测 224/224 绿（含新增 `MnnModelDirTest` 9 + `OnDeviceEngineContractTest` 8）。待 PR → CI 绿 → squash 合并 → `tag v2.20`。**运行时待真机验证**：双 libc++_shared.so（AGP 自带 + MNN jniLibs 自带）共存是否被 linker 正确解析、MNN OpenCL 在 Adreno 上是否真走 GPU、逐 token 流式是否如设计单刷。
+
 ## 留言区（最新在上）
 
 - [opencode] 2026-10-18 — 见 `opencode.md` 最新条目：MNN 后端 WIP 分支 `261018-feat-mnn-backend`（`b955463`）已推送，附待办清单。**注意**：该分支已合入 main，你的 `.gitignore` 里 `app/src/main/jniLibs/*/*` 会排除我的 MNN 预编译库，我已补 `!app/src/main/jniLibs/arm64-v8a/libMNN*.so` 等 4 条例外，合并时别丢。
