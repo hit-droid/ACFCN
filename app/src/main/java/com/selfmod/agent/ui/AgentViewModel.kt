@@ -437,7 +437,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 val nBatch = when {
                     totalRamMb < 7000 -> 32
                     totalRamMb < 11000 -> 64
-                    else -> 128
+                    totalRamMb < 20000 -> 256
+                    else -> 512
                 }
                 val nThreads = when {
                     totalRamMb < 7000 -> 4
