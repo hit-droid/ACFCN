@@ -50,7 +50,9 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Unit tests
-        run: ./gradlew :app:testDebugUnitTest --no-daemon
+        # includeRobolectric: the build excludes Robolectric tests locally
+        # (SDK artifact downloads stall); CI is where the full suite runs.
+        run: ./gradlew :app:testDebugUnitTest --no-daemon -PincludeRobolectric=true
 
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --no-daemon

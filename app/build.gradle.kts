@@ -75,11 +75,12 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
         unitTests.all { task ->
-            // AgentCoreTest runs under Robolectric and stalls locally fetching
-            // SDK 19 artifacts. Exclude it unless a property opts it back in;
-            // CI runs the full suite including AgentCoreTest.
+            // AgentCoreTest and SessionStoreTest run under Robolectric and stall
+            // locally fetching SDK artifacts. Exclude them unless a property opts
+            // them back in; CI runs the full suite including them.
             if (providers.gradleProperty("includeRobolectric").orNull != "true") {
                 task.filter.excludeTestsMatching("com.selfmod.agent.agent.AgentCoreTest")
+                task.filter.excludeTestsMatching("com.selfmod.agent.store.SessionStoreTest")
             }
         }
     }

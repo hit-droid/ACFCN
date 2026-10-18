@@ -1,5 +1,7 @@
 package com.selfmod.agent.ui
 
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,15 +32,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,10 +62,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.selfmod.agent.ui.theme.AccentAmber
@@ -75,6 +85,8 @@ fun AgentScreen(vm: AgentViewModel) {
     val trace by vm.trace.collectAsState()
     val busy by vm.busy.collectAsState()
     val input by vm.inputText.collectAsState()
+    val sessions by vm.sessionList.collectAsState()
+    var showSessions by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) { vm.uiEventsFlow.collect { e -> vm.ingestUiEvent(e) } }
@@ -84,13 +96,20 @@ fun AgentScreen(vm: AgentViewModel) {
 
     val offline by vm.offlineMode.collectAsState()
     val cfg = vm.config()
+    val activeTitle = sessions.firstOrNull { it.id == vm.activeSessionId() }?.title ?: "新会话"
     val endpointHint = when {
-        offline || cfg.isLocalHost() -> "离线 · ${cfg.model.ifEmpty { "(未配置)" }}"
-        else -> "云端 · ${cfg.model.ifEmpty { "(未配置)" }}"
+        offline || cfg.isLocalHost() -> "$activeTitle · 离线 · ${cfg.model.ifEmpty { "(未配置)" }}"
+        else -> "$activeTitle · 云端 · ${cfg.model.ifEmpty { "(未配置)" }}"
     }
 
     Column(Modifier.fillMaxSize()) {
-        ChatTopBar(endpointHint, busy, onClear = { vm.reset() }, onRetry = { vm.retryLast() })
+        ChatTopBar(
+            hint = endpointHint,
+            busy = busy,
+            onClear = { vm.clearCurrentSession() },
+            onRetry = { vm.retryLast() },
+            onOpenSessions = { showSessions = true },
+        )
 
         if (trace.isEmpty()) {
             EmptyChat(enabled = !busy, onPick = { vm.sendPrompt(it) })
@@ -120,10 +139,155 @@ fun AgentScreen(vm: AgentViewModel) {
             onStop = { vm.stop() },
         )
     }
+
+    if (showSessions) {
+        SessionDrawer(
+            sessions = sessions,
+            activeId = vm.activeSessionId(),
+            onDismiss = { showSessions = false },
+            onSwitch = { id ->
+                vm.switchSession(id)
+                showSessions = false
+            },
+            onNew = {
+                vm.newSession()
+                showSessions = false
+            },
+            onDelete = { id -> vm.deleteSession(id) },
+            onExport = { context ->
+                val export = vm.exportCurrentSession()
+                if (export == null) {
+                    Toast.makeText(context, "当前会话没有消息，无需导出", Toast.LENGTH_SHORT).show()
+                } else {
+                    val (stem, markdown) = export
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, stem)
+                        putExtra(Intent.EXTRA_TEXT, markdown)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "导出会话"))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Bottom sheet listing stored sessions (newest first). Rows are tap-to-switch
+ * with an inline two-step delete — a stray tap on the trash icon must not
+ * silently drop a conversation.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun SessionDrawer(
+    sessions: List<com.selfmod.agent.store.SessionSummary>,
+    activeId: String,
+    onDismiss: () -> Unit,
+    onSwitch: (String) -> Unit,
+    onNew: () -> Unit,
+    onDelete: (String) -> Unit,
+    onExport: (android.content.Context) -> Unit,
+) {
+    val context = LocalContext.current
+    val timeFmt = remember { java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()) }
+    var confirmDeleteId by remember { mutableStateOf<String?>(null) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = SurfaceDark) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("会话", color = TextPrimary, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { onExport(context) }) {
+                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = AccentBlue)
+                    Spacer(Modifier.width(4.dp))
+                    Text("导出当前会话", color = AccentBlue, fontSize = 13.sp)
+                }
+                TextButton(onClick = onNew) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = AccentBlue)
+                    Spacer(Modifier.width(4.dp))
+                    Text("新建", color = AccentBlue, fontSize = 13.sp)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            if (sessions.isEmpty()) {
+                Text(
+                    "还没有历史会话。开始一段对话后，它会出现在这里。",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(sessions, key = { it.id }) { s ->
+                        val isActive = s.id == activeId
+                        val confirming = confirmDeleteId == s.id
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isActive) AccentBlue.copy(alpha = 0.15f) else SurfaceVariant.copy(alpha = 0.5f))
+                                .clickable { onSwitch(s.id) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    s.title,
+                                    color = if (isActive) AccentBlue else TextPrimary,
+                                    fontSize = 14.sp,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    "${timeFmt.format(java.util.Date(s.updatedAt))} · ${s.messageCount} 条消息",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            if (confirming) {
+                                Text(
+                                    "确认删除",
+                                    color = Danger,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            onDelete(s.id)
+                                            confirmDeleteId = null
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Filled.DeleteOutline,
+                                    contentDescription = "删除会话",
+                                    tint = TextSecondary,
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clip(CircleShape)
+                                        .clickable { confirmDeleteId = s.id }
+                                        .padding(2.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 }
 
 @Composable
-private fun ChatTopBar(hint: String, busy: Boolean, onClear: () -> Unit, onRetry: () -> Unit) {
+private fun ChatTopBar(
+    hint: String,
+    busy: Boolean,
+    onClear: () -> Unit,
+    onRetry: () -> Unit,
+    onOpenSessions: () -> Unit,
+) {
     Column {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 8.dp),
@@ -145,9 +309,12 @@ private fun ChatTopBar(hint: String, busy: Boolean, onClear: () -> Unit, onRetry
                 TextButton(onClick = onRetry) {
                     Icon(Icons.Filled.Refresh, contentDescription = "重试", modifier = Modifier.size(18.dp))
                 }
+                TextButton(onClick = onOpenSessions) {
+                    Icon(Icons.Filled.History, contentDescription = "历史会话", modifier = Modifier.size(18.dp))
+                }
             }
             TextButton(onClick = onClear) {
-                Icon(Icons.Filled.Clear, contentDescription = "清空", modifier = Modifier.size(18.dp))
+                Icon(Icons.Filled.Clear, contentDescription = "清空当前会话", modifier = Modifier.size(18.dp))
             }
         }
         androidx.compose.material3.HorizontalDivider(color = SurfaceVariant, thickness = 1.dp)
