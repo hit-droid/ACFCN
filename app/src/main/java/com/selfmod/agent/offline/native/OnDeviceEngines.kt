@@ -87,4 +87,10 @@ class OnDeviceEngines(
         runCatching { llama.clearAbort() }
         runCatching { mnn.clearAbort() }
     }
+
+    /** The loaded model's context window; 0 when idle. */
+    fun contextSize(): Int = active?.contextSize() ?: 0
+
+    /** The loaded model's chat template family, or "" when idle. */
+    fun chatTemplate(): String = active?.chatTemplate().orEmpty()
 }

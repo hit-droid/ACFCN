@@ -8,6 +8,7 @@ import com.selfmod.agent.container.ContainerManager
 import com.selfmod.agent.llm.ConnectionTester
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.offline.LocalModelStore
+import com.selfmod.agent.offline.native.FormatRoutingEngine
 import com.selfmod.agent.offline.native.LocalLlmEngine
 import com.selfmod.agent.offline.native.MnnLlmEngine
 import com.selfmod.agent.offline.native.OnDeviceEngines
