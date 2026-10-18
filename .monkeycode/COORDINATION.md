@@ -94,7 +94,7 @@
 - [x] L16 `App.uiEvents` 缓冲溢出静默丢弃 — **已修复**（PR #20, merge 43d9cbe）
 
 ### 功能认领（非缺陷）
-- [@workbuddy] `feat/linux-container` Linux 容器（proot + Alpine rootfs + `linux_exec` 工具），设计见 `specs/linux-container/`。2026-10-18 开工，第一阶段：容器运行时 + 智能体 `linux_exec` 工具。为自进化闭环（容器内 kotlinc + d8 自产 dex）铺路。**不碰 `ui/`、`browser/`、`llm/`、`offline/`、`store/`**；`agent/ToolRegistry.kt`/`Tools.kt` 仅注册区块，已登记于 `board/workbuddy.md`。
+- [@workbuddy] `feat/linux-container` Linux 容器（proot + Alpine rootfs + `linux_exec` 工具），设计见 `specs/linux-container/`。**第一阶段已合入 main（#56, merge efee6b1）：容器运行时 + linux_exec 工具，CI 227 测试 + debug/release 全绿；NDK 编译产物入库 jniLibs（Android 10+ W^X 下 nativeLibraryDir 唯一可 exec）。** 第二阶段进行中：按需资源包（python → gcc → JDK+kotlinc+d8）实现 dex 自产闭环。真机 5 项集成验证待设备（design.md §8）。**不碰 `ui/`、`browser/`、`llm/`、`offline/`、`store/`**；`agent/ToolRegistry.kt`/`Tools.kt` 仅注册区块，已登记于 `board/workbuddy.md`。
 
 ---
 
