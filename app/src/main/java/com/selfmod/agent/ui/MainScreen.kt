@@ -9,6 +9,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -49,7 +50,7 @@ private val tabs = listOf(
     Tab("API", Icons.Filled.Settings),
 )
 
-@androidx.compose.foundation.layout.ExperimentalLayoutApi
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen(vm: AgentViewModel) {
     var tab by rememberSaveable { mutableStateOf(0) }
