@@ -460,13 +460,24 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     cparams.n_threads = threads;
     cparams.n_threads_batch = threads;
 
-    // Flash attention on OpenCL/Adreno: the E031.41 driver compiler crashes
-    // building the FA kernel when the f32 query meets an f16 KV cache, and
-    // ggml then silently disables FA ("Flash Attention is assigned to device
-    // CPU"). The uniform f32/f32 program compiles fine, so pair FA with an f32
-    // KV cache. Fusing attention removes several kernels per layer per token,
-    // which dominates decode cost on this driver. debug.acfcn.fa=off reverts
-    // to f16 KV without FA.
+    // Flash attention on OpenCL/Adreno + KV cache quantization.
+    //
+    // Decode is memory-bandwidth bound and reads the whole KV cache on every
+    // token, so KV *width* is the dominant per-token cost. The E031.41 driver
+    // compiler crashes building the FA kernel for f32-Q x f16-KV (the original
+    // reason we pinned f32 KV), but ggml-opencl ships a dedicated q8_0 FA
+    // variant (f32-Q x q8_0-KV, FA_VARIANT_Q8_0) that compiles and runs, plus a
+    // q4_0 variant. q8_0 KV is 4x smaller than f32 (1 vs 4 bytes), cutting both
+    // KV memory (ctx4096: ~1.5GiB -> ~375MiB) and per-token KV bandwidth while
+    // keeping flash attention fused. q4_0 KV (8x) is available behind
+    // debug.acfcn.kv=q4_0 for a more aggressive trade.
+    //
+    // Tunables (take effect on the next model load):
+    //   debug.acfcn.fa=off                 -> f16 KV, flash attn off (old safe path)
+    //   debug.acfcn.kv=q8_0|q4_0|f16|f32   -> KV cache type for the FA path (default q8_0)
+    // Any context that fails to build with the quantized KV (e.g. a driver that
+    // cannot compile the q8_0 FA kernel) falls back to f16 KV + FA off, so a
+    // kernel problem degrades speed, not loadability.
     {
         char value[PROP_VALUE_MAX] = {0};
         bool fa = true;
@@ -475,21 +486,46 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
             std::string v(value);
             fa = !(v == "off" || v == "0" || v == "false");
         }
-        if (fa && mparams.n_gpu_layers != 0) {
-            cparams.type_k = GGML_TYPE_F32;
-            cparams.type_v = GGML_TYPE_F32;
-            cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
-            LOGI("flash attn enabled, kv cache f32");
-        } else {
-            cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
-            LOGI("flash attn disabled, kv cache f16");
+        ggml_type ktype = GGML_TYPE_Q8_0;
+        len = __system_property_get("debug.acfcn.kv", value);
+        if (len > 0) {
+            std::string v(value);
+            if (v == "q4_0")      ktype = GGML_TYPE_Q4_0;
+            else if (v == "f16")  ktype = GGML_TYPE_F16;
+            else if (v == "f32")  ktype = GGML_TYPE_F32;
+            else if (v == "q8_0") ktype = GGML_TYPE_Q8_0;
         }
+        // f16 KV cannot pair with FA on this driver; force FA off in that case.
+        const bool use_fa =
+            fa && mparams.n_gpu_layers != 0 && ktype != GGML_TYPE_F16;
+        auto make_ctx = [&](ggml_type kt, bool fa_on) -> llama_context * {
+            cparams.type_k = kt;
+            cparams.type_v = kt;
+            cparams.flash_attn_type = fa_on ? LLAMA_FLASH_ATTN_TYPE_ENABLED
+                                            : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            return llama_init_from_model(g_engine.model, cparams);
+        };
+        if (mparams.n_gpu_layers == 0) {
+            // CPU-only path: unchanged f16 KV, no FA (portable across arm64).
+            g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
+        } else if (use_fa) {
+            g_engine.ctx = make_ctx(ktype, true);
+            if (!g_engine.ctx) {
+                LOGI("ctx build failed with kv=%s + FA; retrying f16 KV, FA off",
+                     ggml_type_name(ktype));
+                g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
+            }
+        } else {
+            g_engine.ctx = make_ctx(ktype, false);
+        }
+        LOGI("flash attn %s, kv cache %s (n_gpu_layers=%d)",
+             use_fa ? "enabled" : "disabled", ggml_type_name(cparams.type_k),
+             (int) mparams.n_gpu_layers);
     }
 
     LOGI("ctx params: n_ctx=%u n_batch=%u n_ubatch=%u threads=%d",
          cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, threads);
 
-    g_engine.ctx = llama_init_from_model(g_engine.model, cparams);
     if (!g_engine.ctx) {
         LOGE("failed to create context");
         free_locked();
