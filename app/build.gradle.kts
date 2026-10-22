@@ -15,8 +15,8 @@ android {
         // Keep in sync with release tags: tag v2.14 -> versionName "2.14",
         // versionCode bumps by 1 every release (older installs can only
         // upgrade across a strictly higher versionCode).
-        versionCode = 15
-        versionName = "2.20"
+        versionCode = 16
+        versionName = "2.21"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += listOf("arm64-v8a")
