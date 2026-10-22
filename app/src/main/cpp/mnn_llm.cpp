@@ -141,7 +141,12 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeInit(
         return JNI_FALSE;
     }
 
-    int threadNum = nThreads > 0 ? nThreads : 4;
+    // OpenCL thread_num is a backend hint, not a worker count. MNN's Adreno
+    // path documents 68 (CL_DEVICE_MAX_COMPUTE_UNITS-style). Passing 4/6/8
+    // under-subscribes the GPU. nThreads is kept on the JNI signature for
+    // ABI stability and ignored here.
+    (void) nThreads;
+    const int kOpenClThreadNum = 68;
     int n_batch = nBatch > 0 ? nBatch : 128;
     n_batch = n_batch < 8 ? 8 : (n_batch > 512 ? 512 : n_batch);
     int n_ctx = nCtx > 0 ? nCtx : 2048;
@@ -149,7 +154,7 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeInit(
     char cfgbuf[1024];
     snprintf(cfgbuf, sizeof(cfgbuf),
              R"({"backend_type":"opencl","thread_num":%d,"precision":"low","memory":"low","use_mmap":true,"prompt_cache":true,"reuse_kv":true,"sliding_window":0,"max_new_tokens":%d,"chunk":%d})",
-             threadNum, 1024, n_batch);
+             kOpenClThreadNum, 1024, n_batch);
     bool ok = llm->set_config(cfgbuf) && llm->load();
     if (!ok) {
         LOGE("mnn: load failed; dump:\n%s", llm->dump_config().c_str());
@@ -163,8 +168,8 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeInit(
         std::lock_guard<std::mutex> sl(g_engine.stats_mu);
         g_engine.last_stats = "(loaded)";
     }
-    LOGI("mnn ready: %s ctx=%d threads=%d batch=%d", dir.c_str(), n_ctx,
-         threadNum, n_batch);
+    LOGI("mnn ready: %s ctx=%d opencl_thread_num=%d batch=%d", dir.c_str(), n_ctx,
+         kOpenClThreadNum, n_batch);
     return JNI_TRUE;
 }
 
@@ -211,7 +216,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeLoadInfo(
         JNIEnv *env, jobject /*thiz*/) {
     std::lock_guard<std::mutex> lock(g_engine.mu);
-    std::string out = "backend=opencl (MNN 3.6.1 prebuilt, GPU offload)\n";
+    std::string out = "backend=opencl (MNN 3.6.1 prebuilt, GPU offload)\nthread_num=68\n";
     if (g_engine.llm) {
         const LlmContext *ctx = g_engine.llm->getContext();
         if (ctx) out += "status=" + std::to_string((int) ctx->status) + "\n";

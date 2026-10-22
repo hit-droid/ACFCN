@@ -51,7 +51,9 @@ class LocalLlmEngine : OnDeviceEngine {
                 com.selfmod.agent.util.Diagnostics.log("engine", "load: 文件不存在 ${modelFile.absolutePath}")
                 return false
             }
-            val threads = if (nThreads > 0) nThreads else defaultThreads()
+            val threads = if (nThreads > 0) nThreads else CpuThreadPolicy.llamaCpuThreads(
+                Runtime.getRuntime().availableProcessors(),
+            )
             com.selfmod.agent.util.Diagnostics.log(
                 "engine",
                 "load: ${modelFile.name} size=${modelFile.length() / (1024 * 1024)}MB " +
@@ -191,11 +193,6 @@ class LocalLlmEngine : OnDeviceEngine {
 
     /** The chat template the model reports (falls back to "chatml"). */
     override fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
-
-    private fun defaultThreads(): Int {
-        val cores = Runtime.getRuntime().availableProcessors()
-        return cores.coerceIn(2, 6)
-    }
 
     private external fun nativeInit(
         modelPath: String,
