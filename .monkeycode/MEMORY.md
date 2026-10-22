@@ -60,3 +60,18 @@ This file records user instructions, preferences, and teachings for reference in
   - `/workspace` 与 `/workspace.SelfModAgent.bak` 是两个不同目录（不同 inode）：前者是 ACFCN 主工作区，后者是 2026-10-02 之前的旧备份，勿混淆。
   - 提交前基线已更新：testDebugUnitTest 80/80（SessionCodec 7、OnDevicePrompts 7、SecretRedactor 6、CrashStore 6、StreamAssembler 8、ToolCallParser 8 等），`assembleRelease` 本地约 12 分钟可跑通。
   - 2026-10-04 起 GitHub Actions 因账户计费（payment failed / spending limit）全面中断，job 不启动、无日志无产物；修复前 PR 无法拿绿勾、v2.8 tag 无法发版。失败详情看 check-run annotations（logs blob 会 404）。
+
+[Project Knowledge Summary]
+- Date: 2026-10-22
+- Context: Discovered by Agent while rebuilding the sandbox SDK/NDK and producing a local APK for H10
+- Category: Build Methods / Environment Configuration
+- Instructions:
+  - 本次沙箱 NDK 首次安装是空壳（只有 `.installer`，无 `toolchains/`），`setup-opencl-ndk.sh` 报 "NDK sysroot not found"。修法：`sdkmanager --install "ndk;27.0.12077973"` 重装（会重新下载 ~1.2G 再解压到 2.0G，解压阶段很慢，全程 6~8 分钟，务必后台跑）。装完用 `ndk/27.../source.properties` + `toolchains/llvm/prebuilt/linux-x86_64/sysroot` 存在来确认完整。
+  - **关键坑（init 脚本）**：`settings.gradle.kts` 设了 `repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)`，所以 init 脚本里**不能**用 `allprojects { repositories { ... } }` 加镜像，否则报 "Build was configured to prefer settings repositories ... but repository 'maven' was added by initialization script"（且会浪费 2 分半到 configure 阶段才失败）。正确写法：只用 `beforeSettings { pluginManagement { repositories { ... } }; dependencyResolutionManagement { repositories { ... } } }`，镜子插到 settings 级容器才不会触发保护。现成脚本：/tmp/opencode/mirror.init.gradle.kts。
+  - `setup-opencl-ndk.sh` 需要 cmake/ninja 在 PATH：`export PATH="/opt/android-sdk/cmake/3.22.1/bin:$PATH"`；同时要 `ANDROID_HOME`、`ANDROID_NDK_HOME` 指向 27.0.12077973。跑完产出 `app/src/main/jniLibs/arm64-v8a/libOpenCL.so`（转发 wrapper）+ 往 NDK sysroot 塞 `libOpenCL.so`（仅链接用）。
+  - 构建 APK 必须带 `ACFCN_OPENCL=true` 环境变量（CMakeLists 读的是 env，不是 `-P` gradle 属性）；不带则 libacfcn_llm.so 无 OpenCL。校验：`llvm-readelf -d libacfcn_llm.so | grep OpenCL` 应有 `NEEDED libOpenCL.so`。
+  - 2026-10-22 实测完整命令（冷启动 21m20s，含 llama.cpp FetchContent 重新 clone ~540M、慢）：`export ANDROID_HOME=/opt/android-sdk ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.0.12077973 ACFCN_OPENCL=true PATH="/opt/android-sdk/cmake/3.22.1/bin:$PATH" && cd /workspace && ./gradlew --no-daemon -I /tmp/opencode/mirror.init.gradle.kts -Dhttp.proxyHost= -Dhttps.proxyHost= -Dhttp.nonProxyHosts="*" :app:testDebugUnitTest :app:assembleDebug`。结果：233 测试 0 失败，产出 51M `app/build/outputs/apk/debug/app-debug.apk`，含 libOpenCL/libMNN*/libproot* 全套。
+  - 后台终端 `tail -50` 会缓冲到进程结束才吐日志，看不到中间进度；改用 `> /tmp/opencode/build.log 2>&1` 重定向 + 轮询 `tail`。
+  - 沙箱内存只有 7.8Gi 且长期被 page balloon 占满（常只剩 200~400Mi available），Gradle daemon 只给 `-Xmx1280m`；构建期间别并发跑别的重活。
+  - 推送坑：git 默认 user.email=`Panyuxuan37@outlook.com` 会被 GitHub 拒（"push declined due to email privacy restrictions"）。要用 noreply 地址提交：`git -c user.email="268083658+hit-droid@users.noreply.github.com" commit --amend --no-edit --reset-author`。
+  - `gh` CLI 在沙箱未认证（无 GH_TOKEN、无 ~/.config/gh/hosts.yml），`gh pr create` 会失败；git push 走 agent credential helper 可用。**PR 只能让用户用 push 输出里的 compare 链接手动建**。

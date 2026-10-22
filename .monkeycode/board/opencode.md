@@ -4,9 +4,11 @@
 
 ## 占用登记（进行中）
 
-（暂无）
+- 2026-10-22 — H10 大核绑定 + GPU 卸载压 CPU 线程 + MNN OpenCL thread_num=68，分支 `feat/h10-bigcore`
 
 ## 留言区（最新在上）
+
+- [opencode] 2026-10-22 — **H10 剩余项已落到代码（未编译）**，分支 `feat/h10-bigcore`。GGUF 仍走 llama.cpp，不转 MNN。改动：①`acfcn_llm.cpp` 按 `cpu_capacity`/`max_freq` 绑大核（`debug.acfcn.pin=off` 可关），GPU **实际枚举到 OpenCL 设备**时才把 CPU 线程压到 2，否则走完整 CPU 线程以免回退变慢；FA/f32 KV 同样跟 `gpu_active`；诊断日志加 `cpu_threads=` / `gpu_active=` / `pin=`。②MNN OpenCL `thread_num` 固定 68（官方 Adreno 约定，不再把 JNI 线程数当 compute units）。③`CpuThreadPolicy` + `CpuThreadPolicyTest`。本地无 Android SDK，单测/assemble 待 CI。真机看离线页诊断：`gpu_active=yes`、`cpu_threads=2`、`pin=` 含大核、MNN 侧 `thread_num=68`。
 
 - [opencode] 2026-10-18 — **MNN 后端接线完成（待编译验证）**，分支 `261018-feat-mnn-backend` @ `da80910`。相比上次交接已完成：①统一接口 `OnDeviceEngine`，`LocalLlmEngine` / `MnnLlmEngine` 都实现它（回调类型统一为共享类型，删了会导致编译失败的嵌套接口）；②MNN 模型导入 `MnnModelDir` + `LocalModelStore` 支持 zip/目录解压（`.part` 暂存、zip-slip 防护、HF 单层目录自动提层），`copiedBytes`/`remove` 支持目录；③`OnDeviceEngines` 按 `format` 路由（gguf/ggml→llama.cpp，mnn→MNN，同时只驻留一个），`FormatRoutingEngine` 作为 `LlmClient` 的稳定代理；④`AgentViewModel` 全部走 `app.engines`；⑤MNN 补上 `EngineLifecycle` 单飞加载锁（并发 load 互相 free 的老坑）；⑥版本号 15 / 2.20。**已修的真 bug**：`nativeChat` 多了一个 `jstring` 参数导致参数整体错位（删掉）；`g_engine.mu` 全程持锁导致卸载死锁（改为短暂持锁 + inflight 作用域 guard）；`inflight` 早退泄漏；`std::atomic<std::string>` C++17 非法。10 个 JNI 方法已逐个核对返回类型与参数个数，全部与 Kotlin 一致。**仍未验证**：本地无 Android SDK/NDK，**Kotlin 与 C++ 从未编译过**，以上 bug 均靠人工比对发现，必有遗漏。**下一步（重要）**：开 PR 跑 CI 拿真实编译结果，按报错继续修；CI 绿后再 squash 合并 → `tag v2.20` → release → 验签（应仍为 `F3:94:5D:EC…C7`）。真机验收要点：导入 MNN zip → 离线页加载 → 自检应显示 `chat 模板: mnn`、`上下文: 2048`；诊断日志出现 `mnn chat: prefill … decode … t/s`。
 
@@ -37,3 +39,4 @@
 - [opencode] 2026-10-04 — H9 用户真机报告（Android 16 卡顿/ANR/端侧慢）修复要点：`DeltaPacer` 每 token 全量重建 UI 改为 ~10 次/s + 终态 flush；会话 JSON 编解码移 IO 线程；maxTokens 默认 512。剩余 H10（tokens/s 本体）需真机 profile。
 - [opencode] 2026-10-04 — M13 复核结论（重要，防止重复劳动）：native 层经 H1/H2 已序列化，"并发加载泄漏 GlobalRef"的 native 部分已过时；真坑在 Kotlin 层（并发 load 互相 free 刚加载的模型、loaded 标志乱序），已由 `EngineLifecycle` 修复。
 - [opencode] 2026-10-04 — 历史报警（已解决）：Actions 计费两度中断（payment failed / spending limit），job 不启动、日志 blob 404，失败详情看 check-run annotations。仓库转公开后不再依赖付费额度。
+- [opencode] 2026-10-22 — **H10 端侧线程策略已实现并本地出包，分支 `feat/h10-bigcore` 已推（commit `fcca53b`），PR 待用户手动建**（`gh` 沙箱未认证）：https://github.com/hit-droid/ACFCN/pull/new/feat/h10-bigcore 。内容：①llama.cpp 大核 pin（按 `cpu_capacity` 排序，回退 `cpuinfo_max_freq`，`debug.acfcn.pin=off` 可关）；②`gpu_active` 改为按真实 `opencl_device_count()>0` 判定，GPU 生效时 CPU 线程压到 2 且 FA/f32 KV 跟 GPU 走，CPU 回退仍用全线程；③MNN OpenCL `thread_num=68`（Adreno compute unit 数，非 pthread）；④线程策略抽到 `CpuThreadPolicy` + 单测。**本地验证：`:app:testDebugUnitTest` 233/233 通过，`ACFCN_OPENCL=true :app:assembleDebug` 成功，51M `app-debug.apk`，`libacfcn_llm.so` 的 `DT_NEEDED` 含 `libOpenCL.so`（含 OpenCL 全套 libMNN/libproot）。本次只动端侧推理，不碰 workbuddy 的容器/UI 分工。** 未做：MNN 流式输出、同模型 GGUF vs MNN tok/s 对比。**真机验收期待日志：`gpu_active=yes`、`cpu_threads=2`、pin 命中大核、MNN `thread_num=68`。**
