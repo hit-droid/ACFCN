@@ -17,6 +17,9 @@ jobs:
       # Build the Adreno OpenCL backend. Requires the OpenCL headers + ICD
       # loader staged below; keeps GPU offload validated on every push.
       ACFCN_OPENCL: "true"
+      # Build the Vulkan backend too (preferred at runtime on Adreno). Needs
+      # the host glslc + SPIRV-Headers staged below for shader compilation.
+      ACFCN_VULKAN: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,16 +38,21 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" "cmake;3.22.1" >/dev/null
 
-      - name: Stage OpenCL headers & ICD loader
+      - name: Stage OpenCL/Vulkan headers & ICD loader
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build
+          # glslc + SPIRV-Headers: host-side SPIRV compiler for the Vulkan
+          # backend's shaders (compiled at build time, embedded in the .so).
+          # libvulkan-dev: Vulkan-HPP headers (vulkan.hpp) for ggml-vulkan.
+          sudo apt-get install -y -qq glslc spirv-headers libvulkan-dev
           # Pin the NDK to the version in app/build.gradle.kts; the runner has
           # other NDK versions preinstalled and the script would otherwise pick
           # the newest one, staging headers into a sysroot the build never uses.
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.0.12077973"
           export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
           bash scripts/setup-opencl-ndk.sh arm64-v8a
+          bash scripts/setup-vulkan-ndk.sh arm64-v8a
 
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew

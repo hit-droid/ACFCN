@@ -46,6 +46,36 @@ if(ACFCN_ENABLE_OPENCL)
     set(GGML_OPENCL_EMBED_KERNELS ON CACHE BOOL "" FORCE)
 endif()
 
+# Vulkan backend (Adreno GPU offload). Preferred over OpenCL when both are
+# built: llama.cpp's Vulkan backend is markedly faster on mobile Adreno
+# (subgroup tiling + cooperative matrix on Gen6+), it is the path MNN uses to
+# reach its decode speed, and unlike the OpenCL ICD hack it needs no runtime
+# wrapper — Android ships the Khronos Vulkan loader system-wide. Shaders are
+# SPIRV-compiled at build time by the host glslc and embedded in the .so.
+#
+# Enable with the ACFCN_VULKAN=true environment variable, e.g.:
+#   ACFCN_VULKAN=true ./gradlew :app:assembleDebug
+# Host build deps (all in CI): glslc + SPIRV-Headers (apt: glslc spirv-headers)
+# plus the staged Vulkan-HPP headers (scripts/setup-vulkan-ndk.sh). Linking
+# uses the NDK's own per-API-level libvulkan.so stub; the one 1.1 symbol
+# ggml-vulkan references directly (vkGetPhysicalDeviceFeatures2) is provided
+# by vulkan_compat.cpp so the build also links for API 26/27 targets.
+option(ACFCN_ENABLE_VULKAN "Enable the Vulkan (Adreno GPU) backend" OFF)
+if(DEFINED ENV{ACFCN_VULKAN} AND NOT "$ENV{ACFCN_VULKAN}" STREQUAL "")
+    set(ACFCN_ENABLE_VULKAN "$ENV{ACFCN_VULKAN}" CACHE BOOL "Enable the Vulkan (Adreno GPU) backend" FORCE)
+endif()
+
+if(ACFCN_ENABLE_VULKAN)
+    message(STATUS "ACFCN: Vulkan (Adreno GPU) backend enabled")
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    # The NDK toolchain re-roots find_package to the sysroot
+    # (CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY), which hides the host-installed
+    # SPIRV-Headers CMake config that ggml-vulkan needs. Let package lookups
+    # see the host too; Vulkan/OpenCL themselves still resolve inside the
+    # sysroot (the host has no Vulkan dev package).
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE NEVER)
+endif()
+
 FetchContent_Declare(
     llama
     GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
@@ -62,6 +92,15 @@ if(ACFCN_ENABLE_OPENCL)
     # Only the JNI bridge needs to know whether a GPU backend was built in; the
     # GGML_* defines do not reliably propagate across the llama/ggml targets.
     target_compile_definitions(acfcn_llm PRIVATE ACFCN_USE_OPENCL)
+endif()
+
+if(ACFCN_ENABLE_VULKAN)
+    target_compile_definitions(acfcn_llm PRIVATE ACFCN_USE_VULKAN)
+    # ggml-vulkan references vkGetPhysicalDeviceFeatures2 (Vulkan 1.1) as a
+    # direct extern symbol, which the NDK's API 26/27 libvulkan stubs do not
+    # export. The shim provides it locally (runtime-forwards to the system
+    # loader when present), so no full-symbol link stub is needed.
+    target_sources(acfcn_llm PRIVATE vulkan_compat.cpp)
 endif()
 
 target_link_libraries(acfcn_llm

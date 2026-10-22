@@ -71,9 +71,10 @@ static void llama_log_to_logcat(enum ggml_log_level level, const char *text, voi
 }
 
 // Runtime tuning without rebuilding, read once at model load:
-//   adb shell setprop debug.acfcn.gpu_layers 99   # offload all layers to GPU
-//   adb shell setprop debug.acfcn.gpu_layers 0    # force CPU
-//   adb shell setprop debug.acfcn.threads 8       # override thread count
+//   adb shell setprop debug.acfcn.gpu vulkan     # GPU backend: vulkan|opencl|cpu|auto
+//   adb shell setprop debug.acfcn.gpu_layers 99 # offload all layers to GPU
+//   adb shell setprop debug.acfcn.gpu_layers 0  # force CPU
+//   adb shell setprop debug.acfcn.threads 8     # override thread count
 // Property changes take effect on the next model load.
 static int get_property_int(const char *name, int fallback) {
     char value[PROP_VALUE_MAX] = {0};
@@ -83,6 +84,51 @@ static int get_property_int(const char *name, int fallback) {
     long parsed = strtol(value, &end, 10);
     if (end == value) return fallback;
     return (int) parsed;
+}
+
+// Pick the GPU backend device at model load. Vulkan is preferred over OpenCL
+// on Adreno: llama.cpp's Vulkan decode kernels (subgroup tiling, cooperative
+// matrix on Gen6+) run several times faster than its OpenCL ones, and unlike
+// the OpenCL ICD path it needs no runtime loader wrapper. OpenCL stays as the
+// fallback (and for A/B via debug.acfcn.gpu=opencl). A backend that was not
+// compiled in simply never shows up in the device list.
+//   debug.acfcn.gpu = vulkan (default) | opencl | cpu | auto
+// Returns nullptr for "CPU only". name_out/how_out are for the load log.
+static ggml_backend_dev_t pick_gpu_device(const char *pref, std::string &name_out,
+                                          std::string &how_out) {
+    const std::string p(pref && pref[0] ? pref : "auto");
+    if (p == "cpu") return nullptr;
+
+    struct Backend { const char *key; const char *match; };
+    Backend order[2];
+    int n = 0;
+    auto add = [&](const char *key, const char *match) {
+        if (n < 2) order[n++] = {key, match};
+    };
+    if (p == "opencl") {
+        add("opencl", "OpenCL");
+        add("vulkan", "Vulkan");
+    } else { // vulkan (explicit) or auto: Vulkan first, OpenCL as fallback
+        add("vulkan", "Vulkan");
+        add("opencl", "OpenCL");
+    }
+    for (int i = 0; i < n; ++i) {
+        for (size_t d = 0; d < ggml_backend_dev_count(); ++d) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(d);
+            enum ggml_backend_dev_type t = ggml_backend_dev_type(dev);
+            if (t != GGML_BACKEND_DEVICE_TYPE_GPU &&
+                t != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                continue;
+            }
+            const char *nm = ggml_backend_dev_name(dev);
+            if (nm != nullptr && strstr(nm, order[i].match) != nullptr) {
+                name_out = nm;
+                how_out = order[i].key;
+                return dev;
+            }
+        }
+    }
+    return nullptr;
 }
 
 static JavaVM *g_jvm = nullptr;
@@ -392,24 +438,28 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 
     int gpu_layers = 0;
     llama_model_params mparams = llama_model_default_params();
-#ifdef ACFCN_USE_OPENCL
-    // Use the GPU when it works and fall back to CPU automatically. llama.cpp
-    // silently keeps any layer it cannot place on the GPU on the CPU, and skips
-    // the GPU backend entirely if it fails to initialise, so offloading all
-    // layers is safe: on an unsupported Adreno we still run on the optimized
-    // ARM CPU path. Override per run with
-    //   adb shell setprop debug.acfcn.gpu_layers 0    # force CPU
-    //   adb shell setprop debug.acfcn.gpu_layers 99   # force GPU
-    gpu_layers = get_property_int("debug.acfcn.gpu_layers", 99);
+
+    // GPU backend selection: Vulkan first (faster decode on Adreno), OpenCL
+    // fallback, CPU last. A backend only appears here if it was compiled in.
+    char gpu_pref[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.acfcn.gpu", gpu_pref);
+    std::string gpu_name, gpu_how;
+    ggml_backend_dev_t gpu_dev = pick_gpu_device(gpu_pref, gpu_name, gpu_how);
+    gpu_layers = get_property_int("debug.acfcn.gpu_layers", gpu_dev ? 99 : 0);
     if (gpu_layers < 0) gpu_layers = 0;
+    if (!gpu_dev) gpu_layers = 0;
     mparams.n_gpu_layers = gpu_layers;
     g_engine.gpu_layers.store(gpu_layers);
-    LOGI("OpenCL backend built in; n_gpu_layers=%d (override: debug.acfcn.gpu_layers)",
-         (int) mparams.n_gpu_layers);
-#else
-    mparams.n_gpu_layers = 0; // CPU only; keeps it portable across all arm64 phones
-    g_engine.gpu_layers.store(0);
-#endif
+    if (gpu_dev) {
+        // NULL-terminated device list; llama.cpp offloads n_gpu_layers layers
+        // to this device and keeps the rest on the CPU automatically.
+        ggml_backend_dev_t devices[2] = { gpu_dev, nullptr };
+        mparams.devices = devices;
+        LOGI("gpu backend: %s (via %s), n_gpu_layers=%d (override: debug.acfcn.gpu / debug.acfcn.gpu_layers)",
+             gpu_name.c_str(), gpu_how.c_str(), (int) mparams.n_gpu_layers);
+    } else {
+        LOGI("no GPU backend device selected (override: debug.acfcn.gpu); running CPU-only");
+    }
 
     // mmap: map the weights instead of reading them fully into RAM. This is the
     // single biggest win for load time and memory (matches what MNN does).
@@ -433,6 +483,21 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     const std::string path = jstr(env, modelPath);
     LOGI("loading model (mmap): %s (n_gpu_layers=%d)", path.c_str(), (int) mparams.n_gpu_layers);
     g_engine.model = llama_model_load_from_file(path.c_str(), mparams);
+    if (!g_engine.model && gpu_dev) {
+        // The selected GPU backend refused the model (driver init failure, out
+        // of VRAM, ...). Retry with llama.cpp's own device choice before
+        // giving up on the GPU entirely.
+        LOGI("model load failed on %s; retrying with automatic device selection",
+             gpu_name.c_str());
+        mparams.devices = nullptr;
+        g_engine.model = llama_model_load_from_file(path.c_str(), mparams);
+    }
+    if (!g_engine.model && mparams.n_gpu_layers != 0) {
+        LOGI("model load failed on GPU; retrying CPU-only");
+        mparams.n_gpu_layers = 0;
+        g_engine.gpu_layers.store(0);
+        g_engine.model = llama_model_load_from_file(path.c_str(), mparams);
+    }
 
     // Release the progress ref; no longer needed after load.
     if (g_engine.progressObj != nullptr) {
@@ -460,17 +525,16 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     cparams.n_threads = threads;
     cparams.n_threads_batch = threads;
 
-    // Flash attention on OpenCL/Adreno + KV cache quantization.
+    // Flash attention + KV cache quantization (OpenCL/Adreno and Vulkan).
     //
     // Decode is memory-bandwidth bound and reads the whole KV cache on every
-    // token, so KV *width* is the dominant per-token cost. The E031.41 driver
-    // compiler crashes building the FA kernel for f32-Q x f16-KV (the original
-    // reason we pinned f32 KV), but ggml-opencl ships a dedicated q8_0 FA
-    // variant (f32-Q x q8_0-KV, FA_VARIANT_Q8_0) that compiles and runs, plus a
-    // q4_0 variant. q8_0 KV is 4x smaller than f32 (1 vs 4 bytes), cutting both
-    // KV memory (ctx4096: ~1.5GiB -> ~375MiB) and per-token KV bandwidth while
-    // keeping flash attention fused. q4_0 KV (8x) is available behind
-    // debug.acfcn.kv=q4_0 for a more aggressive trade.
+    // token, so KV *width* is the dominant per-token cost. q8_0 KV is 4x
+    // smaller than f32 (1 vs 4 bytes), cutting both KV memory (ctx4096 on the
+    // 4B model: ~1.15GiB -> ~288MiB) and per-token KV bandwidth while keeping
+    // flash attention fused. Both GPU backends have a quantized-KV FA path:
+    // ggml-opencl ships a dedicated q8_0 FA variant (FA_VARIANT_Q8_0) plus a
+    // q4_0 variant, and ggml-vulkan's FA dequantizes q8_0 K/V inline. q4_0 KV
+    // (8x) is available behind debug.acfcn.kv=q4_0 for a more aggressive trade.
     //
     // Tunables (take effect on the next model load):
     //   debug.acfcn.fa=off                 -> f16 KV, flash attn off (old safe path)
@@ -495,9 +559,12 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
             else if (v == "f32")  ktype = GGML_TYPE_F32;
             else if (v == "q8_0") ktype = GGML_TYPE_Q8_0;
         }
-        // f16 KV cannot pair with FA on this driver; force FA off in that case.
+        // f16 KV cannot pair with FA on the OpenCL/Adreno driver (the E031.41
+        // compiler crash that started all this); Vulkan's FA has a native
+        // f16-KV variant, so only gate the OpenCL path.
         const bool use_fa =
-            fa && mparams.n_gpu_layers != 0 && ktype != GGML_TYPE_F16;
+            fa && mparams.n_gpu_layers != 0 &&
+            (ktype != GGML_TYPE_F16 || gpu_how != "opencl");
         auto make_ctx = [&](ggml_type kt, bool fa_on) -> llama_context * {
             cparams.type_k = kt;
             cparams.type_v = kt;
@@ -518,9 +585,9 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         } else {
             g_engine.ctx = make_ctx(ktype, false);
         }
-        LOGI("flash attn %s, kv cache %s (n_gpu_layers=%d)",
+        LOGI("flash attn %s, kv cache %s on %s (n_gpu_layers=%d)",
              use_fa ? "enabled" : "disabled", ggml_type_name(cparams.type_k),
-             (int) mparams.n_gpu_layers);
+             gpu_how.empty() ? "cpu" : gpu_how.c_str(), (int) mparams.n_gpu_layers);
     }
 
     LOGI("ctx params: n_ctx=%u n_batch=%u n_ubatch=%u threads=%d",
@@ -544,6 +611,8 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         llama_model_desc(g_engine.model, desc, sizeof(desc));
         std::lock_guard<std::mutex> lk(g_gpu_log_mu);
         std::string info = std::string("model=") + desc
+                    + " gpu_backend=" + (gpu_name.empty() ? std::string("cpu")
+                                                             : gpu_name + " (" + gpu_how + ")")
                     + " gpu_offload_build=" + (llama_supports_gpu_offload() ? "yes" : "no")
                     + " requested_gpu_layers=" + std::to_string(gpu_layers)
                     + "\n" + llama_print_system_info();
