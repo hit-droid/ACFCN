@@ -60,3 +60,13 @@ This file records user instructions, preferences, and teachings for reference in
   - `/workspace` 与 `/workspace.SelfModAgent.bak` 是两个不同目录（不同 inode）：前者是 ACFCN 主工作区，后者是 2026-10-02 之前的旧备份，勿混淆。
   - 提交前基线已更新：testDebugUnitTest 80/80（SessionCodec 7、OnDevicePrompts 7、SecretRedactor 6、CrashStore 6、StreamAssembler 8、ToolCallParser 8 等），`assembleRelease` 本地约 12 分钟可跑通。
   - 2026-10-04 起 GitHub Actions 因账户计费（payment failed / spending limit）全面中断，job 不启动、无日志无产物；修复前 PR 无法拿绿勾、v2.8 tag 无法发版。失败详情看 check-run annotations（logs blob 会 404）。
+
+[Project Knowledge Summary]
+- Date: 2026-10-22
+- Context: Discovered while building ACFCN in the sandbox during the multi-session PR (#60); CMake FetchContent pulls llama.cpp from github.com, which times out in the sandbox
+- Category: Environment Configuration / Build Methods / Troubleshooting & Debugging
+- Instructions:
+  - ACFCN 的 CMake 用 FetchContent 拉取 llama.cpp：`app/src/main/cpp/CMakeLists.txt` 中 `FetchContent_Declare(llama GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git GIT_TAG b11179 GIT_SHALLOW TRUE)`。任何触发 CMake 配置的操作（assembleDebug / assembleRelease，以及 testDebugUnitTest 也会触发 configure）都需要联网拉这个仓库。
+  - 沙箱坑：github.com:443 直连不稳，匿名 `git clone` 与带 token clone 均超时；FetchContent 走原生 git 不带 token，且沙箱对 github.com 连接常中断 → CMake configure 卡在 FetchContent 几十分钟直至失败（表现为构建长时间无输出后报错）。
+  - 本地镜像解法（稳定）：① `curl -L https://codeload.github.com/ggml-org/llama.cpp/tarball/b11179 -o /tmp/llama.tar.gz`（约 37MB，codeload 比 git clone 稳得多）；② 解压 `mkdir -p /tmp/llama-cpp && tar -xzf /tmp/llama.tar.gz -C /tmp/llama-cpp --strip-components=1`；③ 在 /tmp/llama-cpp 内 `git init && git add -A && git commit -m init && git tag b11179`（codeload tarball 不含 .git，必须手动打 tag 才能命中 GIT_TAG）；④ `git config --global url."file:///tmp/llama-cpp/".insteadOf "https://github.com/ggml-org/llama.cpp.git"`；⑤ 清 `app/.cxx` 缓存后重新构建，CMake 走本地镜像不再联网。
+  - 该 `insteadOf` 是**全局** git 配置，仅沙箱本地需要，**切勿提交到仓库**；换机器或重搭环境需重新执行上述步骤。
