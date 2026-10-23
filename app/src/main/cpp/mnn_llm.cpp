@@ -11,8 +11,9 @@
 //   2. loop llm->generate(1)                 -- one decode token per step
 //      watching LlmContext.status; the prebuilt runtime flips to
 //      MAX_TOKENS_FINISHED after every step, so terminal states are reset back
-//      to RUNNING locally (restoreAndroidSteppingStatusIfNeeded) until a real
-//      stop token or our own max_tokens bound is hit.
+//      to RUNNING locally until a real stop token or our own max_tokens bound
+//      is hit. After each step, strip <eop> from generate_str and JNI-emit the
+//      cleaned delta so Kotlin onToken / IdleWatchdog see tokens live.
 //
 // Cancellation: the prebuilt libllm.so has no USER_CANCEL hook, so the abort
 // flag is checked between generate(1) steps.
@@ -284,12 +285,35 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
         jstring jp = env->NewStringUTF(piece.c_str());
         jboolean keep = env->CallBooleanMethod(cb, mid, jp);
         env->DeleteLocalRef(jp);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return false;
+        }
         return keep == JNI_TRUE;
     };
 
-    // Buffers for the step loop. The stream writes raw tokens + <eop> markers;
-    // we strip markers at each step boundary and emit the cleaned piece.
-    std::string buf, lastPiece;
+    // generate_str is append-only (plus per-step <eop> markers). Track the
+    // cleaned prefix we already pushed to Kotlin and emit only the delta so
+    // the chat UI / idle watchdog see tokens as they arrive, matching llama.cpp.
+    std::string lastClean;
+    auto flush_delta = [&]() -> bool {
+        const LlmContext *ctx = llm->getContext();
+        if (ctx == nullptr) return true;
+        std::string cleaned = stripMarkers(ctx->generate_str);
+        if (cleaned.size() <= lastClean.size()) return true;
+        if (cleaned.compare(0, lastClean.size(), lastClean) != 0) {
+            lastClean = std::move(cleaned);
+            return true;
+        }
+        std::string delta = cleaned.substr(lastClean.size());
+        lastClean = std::move(cleaned);
+        if (delta.empty()) return true;
+        if (!emit(delta)) {
+            g_engine.abort_flag.store(true);
+            return false;
+        }
+        return true;
+    };
 
     auto t0 = std::chrono::steady_clock::now();
     // Prefill + first token. max_new_tokens=0 keeps the engine in RUNNING so
@@ -297,6 +321,11 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
     llm->response(msgs, &std::cout, kEop, 0);
     auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - t0).count();
+    if (!flush_delta()) {
+        std::lock_guard<std::mutex> sl(g_engine.stats_mu);
+        g_engine.last_stats = "mnn chat: cancelled after prefill";
+        return -98;
+    }
 
     int current_size = 0;
     int stop_code = 0;
@@ -305,6 +334,10 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
     while (!g_engine.abort_flag.load() && !finished && current_size < tn) {
         llm->generate(1);
         current_size++;
+        if (!flush_delta()) {
+            stop_code = -98;
+            break;
+        }
         const LlmContext *ctx = llm->getContext();
         if (ctx == nullptr) break;
         if (ctx->status == LlmStatus::NORMAL_FINISHED) {
@@ -326,12 +359,7 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
     auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - decode_t0).count();
 
-    // Emit the final assembled text in one cleaned shot. The streaming buffer
-    // above is unused on the device path; the chat UI already paces deltas
-    // server-side, and MNN's token granularity is fine for a single flush.
-    auto raw = llm->getContext() ? llm->getContext()->generate_str : "";
-    std::string text = stripMarkers(raw);
-    if (!text.empty()) emit(text);
+    std::string text = lastClean;
 
     if (g_engine.abort_flag.load() && stop_code == 0) stop_code = -98;
     if (stop_code == 0) stop_code = (int) current_size;

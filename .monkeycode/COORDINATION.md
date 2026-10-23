@@ -56,7 +56,7 @@
 - [x] H7 浏览器 `click/type` 索引防漂移 — **已修复**（PR #2, merge 43dc398）
 - [x] H8 崩溃存档静默丢失 — **已修复**（PR #6, merge c6e9297）
 - [x] H9 Android 16 卡顿/ANR — **已修复**（PR #21, merge 146f69c）
-- [@opencode] 260416-chore-h10-merge-note H10 端侧推理 tokens/s 本体 — **CPU dotprod + OpenCL 能力 + GPU 自动回退 + 应用内 tok/s 指标已合**（#35 37a54ae、#38 a1b7f9f、#41 cd3dd31；已发 v2.10、v2.11）；剩余：真机核对 GPU 是否生效、线程大核策略、KV 复用、批量 prefill
+- [@opencode] 261019-feat-h10-bigcore H10 端侧推理 tokens/s 本体 — **CPU dotprod + OpenCL + GPU 自动回退 + tok/s + KV 复用 + 大核 pin + GPU 时 CPU 线程压到 2 + MNN OpenCL thread_num=68 + MNN 逐步 onToken**（#35/#38/#41/#54/#57/#62；v2.10–v2.21）；剩余：真机核对 pin/thread_num 与 tok/s
 
 ### 中严重度
 - [x] M1 `nativeGenerate()` 死代码 — **已删除**（`chore/remove-native-generate`；Kotlin `generate()` 无调用者，连同 JNI export 一并移除）
