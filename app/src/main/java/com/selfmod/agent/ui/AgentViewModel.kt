@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import com.selfmod.agent.agent.ToolRisk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withContext
 import com.selfmod.agent.util.DeltaPacer
 
@@ -40,10 +42,60 @@ data class TraceEntry(
     }
 }
 
+/** A high-risk tool the agent wants to run and is waiting for the user to allow. */
+data class ToolApprovalRequest(
+    val name: String,
+    val args: String,
+    val risk: ToolRisk,
+    val deferred: CompletableDeferred<Boolean>,
+)
+
 class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as App
     private val agent = app.agent
+
+    // ---- High-risk tool approval (see ToolRisk / AgentCore.approvalGate) ----
+    private val _pendingApproval = MutableStateFlow<ToolApprovalRequest?>(null)
+    val pendingApproval: StateFlow<ToolApprovalRequest?> = _pendingApproval.asStateFlow()
+
+    /** Tool names the user chose to always allow for the rest of this session. */
+    private val alwaysAllow = mutableSetOf<String>()
+
+    /**
+     * Suspends the agent loop until the UI resolves the request: [agent.run]
+     * awaits [ToolApprovalRequest.deferred] from its IO coroutine, and the user's
+     * tap on the dialog completes it from the main thread.
+     */
+    private val uiApprovalGate: suspend (name: String, args: String) -> Boolean = { name, args ->
+        if (name in alwaysAllow) {
+            true
+        } else {
+            val deferred = CompletableDeferred<Boolean>()
+            _pendingApproval.value = ToolApprovalRequest(name, args, ToolRisk.HIGH, deferred)
+            deferred.await()
+        }
+    }
+
+    init {
+        agent.approvalGate = uiApprovalGate
+    }
+
+    /** User allowed the pending high-risk tool. With [always], the tool name is
+     * remembered so the dialog won't ask again this session. */
+    fun approveCurrentTool(always: Boolean = false) {
+        val req = _pendingApproval.value ?: return
+        if (always) alwaysAllow.add(req.name)
+        _pendingApproval.value = null
+        req.deferred.complete(true)
+    }
+
+    /** User denied the pending high-risk tool; the agent skips it. */
+    fun denyCurrentTool() {
+        val req = _pendingApproval.value ?: return
+        _pendingApproval.value = null
+        req.deferred.complete(false)
+    }
 
     private val history = mutableListOf<ChatMessage>()
     private val _trace = MutableStateFlow<List<TraceEntry>>(emptyList())
@@ -161,6 +213,10 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stop() {
+        // Resolve any pending approval first, so the suspended run() coroutine
+        // resumes (as denied) instead of hanging on the dialog forever.
+        _pendingApproval.value?.deferred?.complete(false)
+        _pendingApproval.value = null
         agent.cancel()
         // Release any browser action still blocked waiting for a page, so the
         // run's IO thread returns immediately instead of burning its timeout.

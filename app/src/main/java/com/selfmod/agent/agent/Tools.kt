@@ -31,7 +31,8 @@ object Tools {
         browser: BrowserController,
         models: LocalModelStore,
         containerManager: ContainerManager,
-    ): List<ToolDef> = listOf(
+    ): List<ToolDef> {
+        val base = listOf(
         executeJs(scriptEngine, scriptHost),
         readScript(repo),
         writeScript(repo),
@@ -60,8 +61,16 @@ object Tools {
         browserBack(browser),
         listLocalModels(models),
         offlineStatus(settings),
-        linuxExec(containerManager),
-    )
+            linuxExec(containerManager),
+        )
+        // Tools that can run arbitrary code, commands, or load external code are
+        // marked HIGH so the approval gate (AgentCore.approvalGate) can pause for
+        // the user before they execute. Everything else stays LOW (auto-approved).
+        val highRisk = setOf(
+            "execute_js", "install_plugin", "load_plugin", "invoke_plugin", "linux_exec",
+        )
+        return base.map { if (it.spec.name in highRisk) it.copy(risk = ToolRisk.HIGH) else it }
+    }
 
     // ----------------------------------------------------------------- JS
 

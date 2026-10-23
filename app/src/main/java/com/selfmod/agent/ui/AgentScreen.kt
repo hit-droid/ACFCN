@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -87,6 +88,7 @@ fun AgentScreen(vm: AgentViewModel) {
     val input by vm.inputText.collectAsState()
     val sessions by vm.sessionList.collectAsState()
     var showSessions by remember { mutableStateOf(false) }
+    val pendingApproval by vm.pendingApproval.collectAsState()
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) { vm.uiEventsFlow.collect { e -> vm.ingestUiEvent(e) } }
@@ -166,6 +168,47 @@ fun AgentScreen(vm: AgentViewModel) {
                         putExtra(Intent.EXTRA_TEXT, markdown)
                     }
                     context.startActivity(Intent.createChooser(intent, "导出会话"))
+                }
+            },
+        )
+    }
+
+    pendingApproval?.let { req ->
+        AlertDialog(
+            onDismissRequest = { vm.denyCurrentTool() },
+            containerColor = SurfaceDark,
+            title = { Text("授权高危工具", color = TextPrimary) },
+            text = {
+                Column {
+                    Text(
+                        "智能体请求执行一个高危工具，需要你的授权：",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(req.name, color = Danger, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        req.args.take(600),
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.approveCurrentTool(always = false) }) {
+                    Text("允许本次", color = AccentGreen)
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { vm.approveCurrentTool(always = true) }) {
+                        Text("始终允许", color = AccentBlue)
+                    }
+                    TextButton(onClick = { vm.denyCurrentTool() }) {
+                        Text("拒绝", color = Danger)
+                    }
                 }
             },
         )
