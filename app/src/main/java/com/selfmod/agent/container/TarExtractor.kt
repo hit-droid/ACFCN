@@ -15,7 +15,16 @@ import java.io.OutputStream
  * skipped. Permissions are applied best-effort (Android's app-private storage
  * ignores most of them anyway).
  */
-class TarExtractor(private val dest: File) {
+class TarExtractor(
+    private val dest: File,
+    /**
+     * Optional per-entry callback invoked with the normalized (relative) name
+     * of every successfully written entry, in archive order. Used by
+     * [PackManager] to record what a pack installed so it can be removed
+     * again. Null (the default) keeps the rootfs install path allocation-free.
+     */
+    private val entrySink: ((String) -> Unit)? = null,
+) {
 
     sealed class Result {
         data class Done(val fileCount: Int, val skipped: Int) : Result()
@@ -83,22 +92,33 @@ class TarExtractor(private val dest: File) {
             when (typeFlag) {
                 '0', ' ' -> {
                     target.parentFile?.mkdirs()
+                    // The minirootfs reserves busybox applet names as symlinks
+                    // (/usr/bin/strings -> /bin/busybox). A pack that ships the
+                    // real binary must REPLACE that symlink — following it
+                    // would write the payload into busybox itself and brick
+                    // the container's shell.
+                    if (isSymlink(target)) target.delete()
                     target.outputStream().use { out -> copyExact(input, out, size, buf) }
                     applyMode(target, mode)
                     files++
+                    entrySink?.invoke(entryName)
                 }
                 '5' -> {
+                    if (isSymlink(target)) target.delete()
                     target.mkdirs()
                     applyMode(target, mode)
                     files++
+                    entrySink?.invoke(entryName)
                 }
                 '2' -> {   // symlink — Alpine's merged-/usr layout (/bin -> usr/bin) needs these
                     target.parentFile?.mkdirs()
                     val ok = runCatching {
-                        if (target.exists()) target.delete()
+                        // exists() is false for a dangling link; isSymlink()
+                        // covers both so the replacement always lands.
+                        if (target.exists() || isSymlink(target)) target.delete()
                         java.nio.file.Files.createSymbolicLink(target.toPath(), java.nio.file.Paths.get(linkName))
                     }.isSuccess
-                    if (ok) files++ else skipped++
+                    if (ok) { files++; entrySink?.invoke(entryName) } else skipped++
                 }
                 '1' -> skipped++   // hardlink — rootfs tarballs use plain files
                 else -> {
@@ -191,6 +211,9 @@ class TarExtractor(private val dest: File) {
         val n = name.removePrefix("./").trimEnd('/')
         return n.startsWith("/") || n.startsWith("../") || n == ".." || n.contains("/../")
     }
+
+    private fun isSymlink(f: File): Boolean =
+        runCatching { java.nio.file.Files.isSymbolicLink(f.toPath()) }.getOrDefault(false)
 
     private fun normalize(name: String, linkName: String, typeFlag: Char): String? {
         val n = name.removePrefix("./").trimEnd('/')

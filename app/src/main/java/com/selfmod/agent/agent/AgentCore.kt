@@ -2,6 +2,7 @@ package com.selfmod.agent.agent
 
 import com.selfmod.agent.browser.BrowserController
 import com.selfmod.agent.container.ContainerManager
+import com.selfmod.agent.container.PackManager
 import com.selfmod.agent.llm.ChatMessage
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.llm.LlmException
@@ -26,9 +27,10 @@ class AgentCore(
     browser: BrowserController,
     models: LocalModelStore,
     private val container: ContainerManager,
+    private val packs: PackManager,
 ) {
     private val tools: ToolRegistry = ToolRegistry().apply {
-        registerAll(Tools.all(scriptEngine, scriptHost, repo, plugins, settings, uiNotifier, browser, models, container))
+        registerAll(Tools.all(scriptEngine, scriptHost, repo, plugins, settings, uiNotifier, browser, models, container, packs))
     }
 
     private val cancelled = AtomicBoolean(false)
