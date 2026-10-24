@@ -4,9 +4,11 @@
 
 ## 占用登记（进行中）
 
-（暂无）
+- 2026-10-24 — H10 大核绑定 + GPU 卸载压 CPU 线程 + MNN OpenCL thread_num=68 + MNN 逐步 onToken，分支 `feat/v2.24-h10-pin-mnn-stream`
 
 ## 留言区（最新在上）
+
+- [opencode] 2026-10-24 — **H10 rebase 到 v2.23 main，准备发 v2.24**，分支 `feat/v2.24-h10-pin-mnn-stream`。main 已占用 v2.21 Vulkan / v2.22 工具授权 / v2.23 容器资源包，本版升 versionCode 19 / versionName 2.24。改动：①llama.cpp 按 `cpu_capacity`/`max_freq` 绑大核（`debug.acfcn.pin=off` 可关）；②`gpu_active` 跟 `n_gpu_layers!=0`（Vulkan/OpenCL 都算），GPU 生效时 CPU 线程压到 2；③MNN OpenCL `thread_num=68`；④MNN `generate(1)` 逐步 onToken，聊天页边生成边出字。q8_0 KV + FA 保持 main 行为。真机看离线页诊断：`gpu_active=yes`、`cpu_threads=2`、`pin=` 含大核、MNN `thread_num=68`。
 
 - [opencode] 2026-10-18 — **MNN 后端接线完成（待编译验证）**，分支 `261018-feat-mnn-backend` @ `da80910`。相比上次交接已完成：①统一接口 `OnDeviceEngine`，`LocalLlmEngine` / `MnnLlmEngine` 都实现它（回调类型统一为共享类型，删了会导致编译失败的嵌套接口）；②MNN 模型导入 `MnnModelDir` + `LocalModelStore` 支持 zip/目录解压（`.part` 暂存、zip-slip 防护、HF 单层目录自动提层），`copiedBytes`/`remove` 支持目录；③`OnDeviceEngines` 按 `format` 路由（gguf/ggml→llama.cpp，mnn→MNN，同时只驻留一个），`FormatRoutingEngine` 作为 `LlmClient` 的稳定代理；④`AgentViewModel` 全部走 `app.engines`；⑤MNN 补上 `EngineLifecycle` 单飞加载锁（并发 load 互相 free 的老坑）；⑥版本号 15 / 2.20。**已修的真 bug**：`nativeChat` 多了一个 `jstring` 参数导致参数整体错位（删掉）；`g_engine.mu` 全程持锁导致卸载死锁（改为短暂持锁 + inflight 作用域 guard）；`inflight` 早退泄漏；`std::atomic<std::string>` C++17 非法。10 个 JNI 方法已逐个核对返回类型与参数个数，全部与 Kotlin 一致。**仍未验证**：本地无 Android SDK/NDK，**Kotlin 与 C++ 从未编译过**，以上 bug 均靠人工比对发现，必有遗漏。**下一步（重要）**：开 PR 跑 CI 拿真实编译结果，按报错继续修；CI 绿后再 squash 合并 → `tag v2.20` → release → 验签（应仍为 `F3:94:5D:EC…C7`）。真机验收要点：导入 MNN zip → 离线页加载 → 自检应显示 `chat 模板: mnn`、`上下文: 2048`；诊断日志出现 `mnn chat: prefill … decode … t/s`。
 

@@ -54,7 +54,8 @@ static void llama_log_to_logcat(enum ggml_log_level level, const char *text, voi
     // and how many layers actually landed on the GPU. Shown in the in-app
     // diagnostics so a device can be profiled without adb logcat.
     static const char *keys[] = {
-        "offload", "OpenCL", "opencl", "ggml_opencl", "backend", "device",
+        "offload", "OpenCL", "opencl", "ggml_opencl", "Vulkan", "vulkan",
+        "ggml_vulkan", "backend", "device",
         "model buffer size", "failed", "not supported", "no usable",
     };
     bool keep = false;
@@ -75,6 +76,7 @@ static void llama_log_to_logcat(enum ggml_log_level level, const char *text, voi
 //   adb shell setprop debug.acfcn.gpu_layers 99 # offload all layers to GPU
 //   adb shell setprop debug.acfcn.gpu_layers 0  # force CPU
 //   adb shell setprop debug.acfcn.threads 8     # override thread count
+//   adb shell setprop debug.acfcn.pin off       # skip big-core affinity
 // Property changes take effect on the next model load.
 static int get_property_int(const char *name, int fallback) {
     char value[PROP_VALUE_MAX] = {0};
@@ -129,6 +131,101 @@ static ggml_backend_dev_t pick_gpu_device(const char *pref, std::string &name_ou
         }
     }
     return nullptr;
+}
+
+static bool get_property_off(const char *name) {
+    char value[PROP_VALUE_MAX] = {0};
+    int len = __system_property_get(name, value);
+    if (len <= 0) return false;
+    return value[0] == '0' || strcmp(value, "off") == 0 || strcmp(value, "false") == 0;
+}
+
+// GPU owns the matmuls; extra CPU workers fight Adreno for DRAM bandwidth.
+static const int kGpuCpuThreads = 2;
+
+static int nproc_online() {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 1;
+    if (n > GGML_MAX_N_THREADS) n = GGML_MAX_N_THREADS;
+    return (int) n;
+}
+
+static int read_sysfs_int(const char *path) {
+    int v = 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    if (fscanf(f, "%d", &v) != 1) v = 0;
+    fclose(f);
+    return v;
+}
+
+static int cpu_capacity(int cpu) {
+    char path[96];
+    snprintf(path, sizeof(path),
+             "/sys/devices/system/cpu/cpu%d/cpu_capacity", cpu);
+    return read_sysfs_int(path);
+}
+
+static int cpu_max_freq_khz(int cpu) {
+    char path[96];
+    snprintf(path, sizeof(path),
+             "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", cpu);
+    int khz = read_sysfs_int(path);
+    if (khz > 0) return khz;
+    snprintf(path, sizeof(path),
+             "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
+    return read_sysfs_int(path);
+}
+
+// Pin the `want` highest-capacity CPUs (big/prime cluster). Prefer
+// cpu_capacity (readable on Android); fall back to max frequency.
+// All-zero mask means "leave affinity alone", which ggml treats as default.
+static int fill_big_core_mask(bool *cpumask, int want) {
+    const int n = nproc_online();
+    struct Core { int cpu; int cap; int khz; };
+    Core cores[GGML_MAX_N_THREADS];
+    int count = 0;
+    for (int i = 0; i < n; ++i) {
+        cores[count].cpu = i;
+        cores[count].cap = cpu_capacity(i);
+        cores[count].khz = cpu_max_freq_khz(i);
+        count++;
+    }
+    std::sort(cores, cores + count, [](const Core &a, const Core &b) {
+        if (a.cap != b.cap) return a.cap > b.cap;
+        if (a.khz != b.khz) return a.khz > b.khz;
+        return a.cpu < b.cpu;
+    });
+    memset(cpumask, 0, sizeof(bool) * GGML_MAX_N_THREADS);
+    if (count == 0) return 0;
+    if (cores[0].cap <= 0 && cores[0].khz <= 0) return 0;
+    int take = want < 1 ? 1 : want;
+    if (take > count) take = count;
+    for (int i = 0; i < take; ++i) {
+        cpumask[cores[i].cpu] = true;
+    }
+    return take;
+}
+
+static std::string describe_cpumask(const bool *cpumask) {
+    std::string out;
+    const int n = nproc_online();
+    for (int i = 0; i < n; ++i) {
+        if (!cpumask[i]) continue;
+        if (!out.empty()) out += ",";
+        out += std::to_string(i);
+        int cap = cpu_capacity(i);
+        int khz = cpu_max_freq_khz(i);
+        if (cap > 0) {
+            out += "cap";
+            out += std::to_string(cap);
+        } else if (khz > 0) {
+            out += "@";
+            out += std::to_string(khz / 1000);
+            out += "MHz";
+        }
+    }
+    return out.empty() ? "-" : out;
 }
 
 static JavaVM *g_jvm = nullptr;
@@ -186,6 +283,7 @@ namespace {
 struct Engine {
     llama_model   *model = nullptr;
     llama_context *ctx   = nullptr;
+    ggml_threadpool_t threadpool = nullptr;
     const llama_vocab *vocab = nullptr;
     std::atomic<int> n_ctx {2048};
     std::atomic<int> gpu_layers {0};
@@ -244,7 +342,15 @@ std::string jstr(JNIEnv *env, jstring s) {
 }
 
 void free_locked() {
-    if (g_engine.ctx)   { llama_free(g_engine.ctx); g_engine.ctx = nullptr; }
+    if (g_engine.ctx) {
+        llama_detach_threadpool(g_engine.ctx);
+        llama_free(g_engine.ctx);
+        g_engine.ctx = nullptr;
+    }
+    if (g_engine.threadpool) {
+        ggml_threadpool_free(g_engine.threadpool);
+        g_engine.threadpool = nullptr;
+    }
     if (g_engine.model) { llama_model_free(g_engine.model); g_engine.model = nullptr; }
     g_engine.vocab = nullptr;
     g_engine.ready.store(false);
@@ -517,8 +623,19 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     if (batch < 8) batch = 8;
     if (batch > 512) batch = 512;
     int threads = nThreads;
+    if (threads < 1) threads = 4;
+    // Clamp CPU workers only when a GPU backend actually took layers.
+    // n_gpu_layers is forced to 0 when pick_gpu_device() finds nothing, and
+    // the CPU retry below also zeros it, so this is the real GPU-active flag
+    // for both Vulkan and OpenCL.
+    bool gpu_active = mparams.n_gpu_layers != 0;
+    if (gpu_active && threads > kGpuCpuThreads) {
+        threads = kGpuCpuThreads;
+    }
     int prop_threads = get_property_int("debug.acfcn.threads", 0);
     if (prop_threads > 0) threads = prop_threads;
+    if (threads < 1) threads = 1;
+    if (threads > GGML_MAX_N_THREADS) threads = GGML_MAX_N_THREADS;
     cparams.n_ctx     = (uint32_t) nCtx;
     cparams.n_batch   = (uint32_t) batch;
     cparams.n_ubatch  = (uint32_t) batch;
@@ -598,6 +715,35 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         free_locked();
         return JNI_FALSE;
     }
+
+    // Pin workers to the highest-capacity cores (prime/big). Little cores
+    // stall Q4_K SDOT. debug.acfcn.pin=off skips the mask.
+    std::string pin_desc = "default";
+    if (!get_property_off("debug.acfcn.pin")) {
+        ggml_threadpool_params tparams = ggml_threadpool_params_default(threads);
+        int pinned = fill_big_core_mask(tparams.cpumask, threads);
+        if (pinned > 0) {
+            tparams.n_threads = threads;
+            tparams.strict_cpu = true;
+            tparams.prio = GGML_SCHED_PRIO_NORMAL;
+            g_engine.threadpool = ggml_threadpool_new(&tparams);
+            if (g_engine.threadpool) {
+                llama_attach_threadpool(g_engine.ctx, g_engine.threadpool, nullptr);
+                pin_desc = describe_cpumask(tparams.cpumask);
+                LOGI("threadpool pinned n=%d cores=%s", threads, pin_desc.c_str());
+            } else {
+                pin_desc = "alloc-failed";
+                LOGI("threadpool alloc failed; using llama default affinity");
+            }
+        } else {
+            pin_desc = "no-freq";
+            LOGI("cpu max-freq unreadable; skipping affinity pin");
+        }
+    } else {
+        pin_desc = "off";
+        LOGI("affinity pin disabled (debug.acfcn.pin=off)");
+    }
+
     llama_set_abort_callback(g_engine.ctx, abort_trampoline, &g_engine);
     g_engine.n_ctx.store(nCtx);
     g_engine.n_batch = batch;
@@ -615,6 +761,9 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
                                                              : gpu_name + " (" + gpu_how + ")")
                     + " gpu_offload_build=" + (llama_supports_gpu_offload() ? "yes" : "no")
                     + " requested_gpu_layers=" + std::to_string(gpu_layers)
+                    + " gpu_active=" + std::string(gpu_active ? "yes" : "no")
+                    + " cpu_threads=" + std::to_string(threads)
+                    + " pin=" + pin_desc
                     + "\n" + llama_print_system_info();
 #ifdef ACFCN_USE_OPENCL
         const char *icd_v = getenv("OCL_ICD_VENDORS");
