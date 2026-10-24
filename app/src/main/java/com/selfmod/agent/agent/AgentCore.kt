@@ -6,12 +6,16 @@ import com.selfmod.agent.container.PackManager
 import com.selfmod.agent.llm.ChatMessage
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.llm.LlmException
+import com.selfmod.agent.llm.ToolSpec
+import com.selfmod.agent.memory.MemoryService
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.plugin.PluginRegistry
 import com.selfmod.agent.repo.CodeRepository
 import com.selfmod.agent.script.ScriptApi
 import com.selfmod.agent.script.ScriptEngine
 import com.selfmod.agent.store.SettingsStore
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
@@ -28,9 +32,10 @@ class AgentCore(
     models: LocalModelStore,
     private val container: ContainerManager,
     private val packs: PackManager,
+    private val memory: MemoryService,
 ) {
     private val tools: ToolRegistry = ToolRegistry().apply {
-        registerAll(Tools.all(scriptEngine, scriptHost, repo, plugins, settings, uiNotifier, browser, models, container, packs))
+        registerAll(Tools.all(scriptEngine, scriptHost, repo, plugins, settings, uiNotifier, browser, models, container, packs, memory))
     }
 
     private val cancelled = AtomicBoolean(false)
@@ -72,7 +77,11 @@ class AgentCore(
         cancelled.set(false)
         llmClient.clearAbort()
         loopGuard.reset()
-        history.add(ChatMessage("user", userText))
+        // P0-1: surface relevant long-term memory + the user profile at the top of
+        // the turn so the agent "remembers" across sessions. Query-scoped, so each
+        // turn recalls what is actually relevant rather than a fixed blob.
+        val memCtx = buildMemoryContext(userText)
+        history.add(ChatMessage("user", if (memCtx != null) "$memCtx\n\n$userText" else userText))
         onStep(AgentStep.Started)
 
         var iteration = 0
@@ -211,5 +220,78 @@ class AgentCore(
 
         /** A call repeated this many times (same name+args) is treated as a stuck loop (H4). */
         private const val MAX_REPEAT_CALLS = 3
+    }
+
+    /**
+     * Builds the memory preamble for a turn: the user's profile (P2-8) plus the
+     * most relevant long-term facts for [query]. Returns null when there is nothing
+     * to add so the prompt stays clean.
+     */
+    private fun buildMemoryContext(query: String): String? {
+        val profile = memory.userProfile().take(3)
+        val facts = memory.recall(query, MemoryService.DEFAULT_K)
+        val parts = mutableListOf<String>()
+        if (profile.isNotEmpty()) {
+            parts += "【用户画像】\n" + profile.joinToString("\n") { "· ${it.text}" }
+        }
+        if (facts.isNotEmpty()) {
+            parts += "【长期记忆】\n" + facts.joinToString("\n") { "· ${it.text}" }
+        }
+        return if (parts.isEmpty()) null else parts.joinToString("\n\n")
+    }
+
+    /**
+     * P0-1: fold a finished conversation into a few durable facts. Best-effort and
+     * fully suspended — a failure here never affects the answer that was already
+     * produced. Skipped when auto-memory is off or the transcript is too short.
+     */
+    suspend fun distillMemory(history: List<ChatMessage>) {
+        if (!settings.autoMemory()) return
+        val transcript = history
+            .filter { it.role == "user" || it.role == "assistant" }
+            .takeLast(40)
+            .joinToString("\n") { "${it.role}: ${it.content.take(1500)}" }
+        if (transcript.length < 200) return
+        val prompt = buildString {
+            append("从下面这段对话里提取 0~5 条值得长期记住的事实（用户偏好、重要约定、踩坑经验、关于用户的信息）。")
+            append("只输出一个 JSON 数组，每条是字符串；没有可记的就输出 []。不要输出其他内容。\n\n")
+            append(transcript)
+        }
+        val cfg = settings.llmConfig()
+        val out = withContext(Dispatchers.IO) {
+            runCatching {
+                llmClient.chat(
+                    config = cfg,
+                    messages = listOf(ChatMessage("user", prompt)),
+                    tools = emptyList<ToolSpec>(),
+                    onDelta = {},
+                    cancelled = { false },
+                ).content
+            }.getOrNull()
+        } ?: return
+        parseFacts(out).forEach { fact ->
+            runCatching { memory.record(fact, MemoryService.Kind.LESSON) }
+        }
+    }
+
+    /** Pulls a JSON string array out of model output that may be wrapped in ``` fences. */
+    private fun parseFacts(text: String): List<String> {
+        val cleaned = text.trim()
+            .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val arrText = runCatching { JSONObject(cleaned) }.getOrNull()
+            ?.optJSONArray("facts")
+            ?: runCatching { JSONArray(cleaned) }.getOrNull()
+            ?: runCatching {
+                // Fall back to grabbing the first [...] block if prose leaked in.
+                val start = cleaned.indexOf('[')
+                val end = cleaned.lastIndexOf(']')
+                if (start >= 0 && end > start) JSONArray(cleaned.substring(start, end + 1)) else null
+            }.getOrNull()
+            ?: return emptyList()
+        val out = ArrayList<String>()
+        for (i in 0 until arrText.length()) {
+            arrText.optString(i).takeIf { it.isNotBlank() }?.let { out.add(it) }
+        }
+        return out
     }
 }

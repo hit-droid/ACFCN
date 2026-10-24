@@ -15,6 +15,7 @@ import com.selfmod.agent.llm.LlmConfig
 import com.selfmod.agent.llm.ProbeHit
 import com.selfmod.agent.llm.SavedProfile
 import com.selfmod.agent.offline.LocalModel
+import com.selfmod.agent.offline.RecommendedModels
 import com.selfmod.agent.repo.Version
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,9 +26,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import com.selfmod.agent.agent.ToolRisk
+import com.selfmod.agent.service.AgentService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withContext
 import com.selfmod.agent.util.DeltaPacer
+import org.json.JSONObject
 
 data class TraceEntry(
     val ts: Long,
@@ -48,6 +51,8 @@ data class ToolApprovalRequest(
     val args: String,
     val risk: ToolRisk,
     val deferred: CompletableDeferred<Boolean>,
+    /** Declared plugin permissions (P1-3), shown to the user before approving. */
+    val permissions: List<String> = emptyList(),
 )
 
 class AgentViewModel(application: Application) : AndroidViewModel(application) {
@@ -69,32 +74,76 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val uiApprovalGate: suspend (name: String, args: String) -> Boolean = { name, args ->
         if (name in alwaysAllow) {
+            // P0-2: an already-persisted allow-list hit is still recorded (source
+            // "persisted") so the audit trail is complete.
+            app.settings.logApproval(name, true, "persisted")
+            refreshApprovals()
             true
         } else {
             val deferred = CompletableDeferred<Boolean>()
-            _pendingApproval.value = ToolApprovalRequest(name, args, ToolRisk.HIGH, deferred)
+            _pendingApproval.value = ToolApprovalRequest(
+                name, args, ToolRisk.HIGH, deferred, permissionsFor(name, args),
+            )
             deferred.await()
         }
     }
 
+    /** For plugin tools, surface the permissions declared at install time (P1-3). */
+    private fun permissionsFor(name: String, args: String): List<String> {
+        if (name != "load_plugin" && name != "install_plugin") return emptyList()
+        return runCatching {
+            app.settings.pluginPermissions(JSONObject(args).optString("name", ""))
+        }.getOrDefault(emptyList())
+    }
+
     init {
         agent.approvalGate = uiApprovalGate
+        // P0-2: seed the in-memory allow-list from the persisted set so "always
+        // allow" survives a process restart.
+        alwaysAllow.addAll(app.settings.approvedTools())
+        refreshApprovals()
     }
 
     /** User allowed the pending high-risk tool. With [always], the tool name is
-     * remembered so the dialog won't ask again this session. */
+     * remembered (this session and, when [always], persisted) so the dialog
+     * won't ask again. */
     fun approveCurrentTool(always: Boolean = false) {
         val req = _pendingApproval.value ?: return
-        if (always) alwaysAllow.add(req.name)
+        if (always) {
+            alwaysAllow.add(req.name)
+            app.settings.addApprovedTool(req.name)
+        }
+        app.settings.logApproval(req.name, true, "user")
         _pendingApproval.value = null
         req.deferred.complete(true)
+        refreshApprovals()
     }
 
     /** User denied the pending high-risk tool; the agent skips it. */
     fun denyCurrentTool() {
         val req = _pendingApproval.value ?: return
+        app.settings.logApproval(req.name, false, "denied")
         _pendingApproval.value = null
         req.deferred.complete(false)
+        refreshApprovals()
+    }
+
+    /** Revoke a previously "always allow"-ed tool (settings page). */
+    fun revokeApproval(name: String) {
+        alwaysAllow.remove(name)
+        app.settings.removeApprovedTool(name)
+        refreshApprovals()
+    }
+
+    private val _approvedTools = MutableStateFlow<List<String>>(emptyList())
+    val approvedTools: StateFlow<List<String>> = _approvedTools.asStateFlow()
+
+    private val _approvalLog = MutableStateFlow<List<com.selfmod.agent.store.SettingsStore.ApprovalEntry>>(emptyList())
+    val approvalLog: StateFlow<List<com.selfmod.agent.store.SettingsStore.ApprovalEntry>> = _approvalLog.asStateFlow()
+
+    fun refreshApprovals() {
+        _approvedTools.value = app.settings.approvedTools().toList().sorted()
+        _approvalLog.value = app.settings.approvalLog()
     }
 
     private val history = mutableListOf<ChatMessage>()
@@ -224,6 +273,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         runJob?.cancel()
         runJob = null
         _busy.value = false
+        // P1-6: tear down the foreground service we may have raised.
+        AgentService.stop(getApplication())
     }
 
     fun retryLast() {
@@ -240,6 +291,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         _inputText.value = ""
         _busy.value = true
         runJob = viewModelScope.launch {
+            // P1-6: raise a foreground service so a long agent task survives the
+            // user switching apps. Stopped again once the run settles.
+            AgentService.start(getApplication())
             try {
                 if (history.none { it.role == "system" }) {
                     history.add(0, ChatMessage("system", agent.systemPrompt()))
@@ -250,6 +304,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _busy.value = false
                 persistSession()
+                AgentService.stop(getApplication())
+                // P0-1: best-effort — fold this conversation into durable memory.
+                launch(Dispatchers.IO) { runCatching { agent.distillMemory(history) } }
             }
         }
     }
@@ -512,6 +569,59 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         setConfig(cfg)
         app.settings.setOfflineMode(true)
         _offlineMode.value = true
+    }
+
+    // ---- P2-7: in-app model downloader ----
+
+    val recommendedModels: List<com.selfmod.agent.offline.RecommendedModel> = RecommendedModels.ALL
+
+    /** name -> progress fraction (0..1), or absent when idle/errored. */
+    private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val downloadProgress: StateFlow<Map<String, Float>> = _downloadProgress.asStateFlow()
+
+    /** name -> status text. */
+    private val _downloadStatus = MutableStateFlow<Map<String, String>>(emptyMap())
+    val downloadStatus: StateFlow<Map<String, String>> = _downloadStatus.asStateFlow()
+
+    private fun downloadStateKey(rec: com.selfmod.agent.offline.RecommendedModel): String = rec.name
+
+    /** One-tap download of a recommended model; registers it on success. */
+    fun downloadModel(rec: com.selfmod.agent.offline.RecommendedModel) {
+        val key = downloadStateKey(rec)
+        if (_downloadProgress.value.containsKey(key)) return
+        launchDownload(rec.downloadUrl, "$key.gguf", null, key)
+    }
+
+    /** Download from an arbitrary direct URL (e.g. a corrected HuggingFace link). */
+    fun downloadFromUrl(url: String, displayName: String, sha256: String? = null) {
+        val key = displayName.ifBlank { url.substringAfterLast('/').ifBlank { url } }
+        if (_downloadProgress.value.containsKey(key)) return
+        launchDownload(url, if (displayName.endsWith(".gguf")) displayName else "$displayName.gguf", sha256, key)
+    }
+
+    private fun launchDownload(url: String, fileName: String, sha256: String?, key: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _downloadProgress.value = _downloadProgress.value + (key to 0f)
+            _downloadStatus.value = _downloadStatus.value + (key to "准备下载…")
+            try {
+                app.models.download(url, fileName, sha256) { frac, done, total ->
+                    _downloadProgress.value = _downloadProgress.value + (key to frac)
+                    if (total > 0) {
+                        val mb = 1024L * 1024L
+                        _downloadStatus.value = _downloadStatus.value +
+                            (key to "下载中 ${(frac * 100).toInt()}%  ·  ${done / mb}/${total / mb} MB")
+                    } else {
+                        _downloadStatus.value = _downloadStatus.value + (key to "下载中…  ${(done / (1024L * 1024L))} MB")
+                    }
+                }
+                _downloadProgress.value = _downloadProgress.value + (key to 1f)
+                _downloadStatus.value = _downloadStatus.value + (key to "完成，已导入本地模型")
+                refreshLocalModels()
+            } catch (e: Throwable) {
+                _downloadProgress.value = _downloadProgress.value - key
+                _downloadStatus.value = _downloadStatus.value + (key to "失败：${e.message}")
+            }
+        }
     }
 
     fun navigateBrowser(url: String) {

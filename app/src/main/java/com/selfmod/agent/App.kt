@@ -8,6 +8,7 @@ import com.selfmod.agent.container.ContainerManager
 import com.selfmod.agent.container.PackManager
 import com.selfmod.agent.llm.ConnectionTester
 import com.selfmod.agent.llm.LlmClient
+import com.selfmod.agent.memory.MemoryService
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.offline.native.FormatRoutingEngine
 import com.selfmod.agent.offline.native.LocalLlmEngine
@@ -117,6 +118,7 @@ class App : Application() {
     private var _storage: StorageStats? = null
     private var _container: ContainerManager? = null
     private var _packs: PackManager? = null
+    private var _memory: MemoryService? = null
 
     // uiQueue is constructed eagerly and never fails in practice; guarded by a
     // nullable indirection so a future failure path can't take down every collector.
@@ -142,6 +144,8 @@ class App : Application() {
     val crashStore: CrashStore get() = _crashStore ?: fail("crashStore")
     val storage: StorageStats get() = _storage ?: fail("storage")
     val container: ContainerManager get() = _container ?: fail("container")
+    /** Long-term memory store (P0-1 / P2-8). */
+    val memory: MemoryService get() = _memory ?: fail("memory")
 
     /** Names of features whose init block threw; surfaced by `AgentViewModel` to
      *  show the user what's broken instead of letting them tap a tab that crashes. */
@@ -193,6 +197,7 @@ class App : Application() {
             _models = LocalModelStore(this)
             _tester = ConnectionTester()
             _sessions = SessionStore(this)
+            _memory = MemoryService(this)
         }
     }
 
@@ -247,7 +252,7 @@ class App : Application() {
         // than a half-built AgentCore that crashes on its first tool call.
         if (_settings == null || _repo == null || _plugins == null ||
             _llmClient == null || _scriptEngine == null || _browser == null ||
-            _models == null || _container == null || _packs == null
+            _models == null || _container == null || _packs == null || _memory == null
         ) {
             Log.w(TAG, "app_init agent skipped — missing dependency")
             _failedFeatures.add("agent")
@@ -274,6 +279,7 @@ class App : Application() {
                 models = _models!!,
                 container = _container!!,
                 packs = _packs!!,
+                memory = _memory!!,
             )
         }
     }

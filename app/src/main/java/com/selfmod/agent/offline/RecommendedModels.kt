@@ -7,14 +7,19 @@ data class RecommendedModel(
     val quant: String,
     val sizeLabel: String,
     val ramHint: String,
+    /** Hugging Face repo page — for "在浏览器打开". */
     val url: String,
+    /** Direct GGUF file link (HF `resolve/main/...`) — for one-tap in-app download. */
+    val downloadUrl: String,
     val note: String,
 )
 
 object RecommendedModels {
     /**
      * Only small enough models to realistically run on phones (arm64, CPU).
-     * Links point to stable Hugging Face repos.
+     * Links point to stable Hugging Face repos. [downloadUrl] is the direct
+     * `resolve/main/<file>` GGUF link the in-app downloader pulls; the renamed
+     * quant files are the standard Q4_K_M builds these repos publish.
      */
     val ALL: List<RecommendedModel> = listOf(
         RecommendedModel(
@@ -24,6 +29,7 @@ object RecommendedModels {
             sizeLabel = "约 1.1 GB",
             ramHint = "需 ~2 GB 内存",
             url = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
             note = "入门首选，速度快，中文可用",
         ),
         RecommendedModel(
@@ -33,6 +39,7 @@ object RecommendedModels {
             sizeLabel = "约 2.0 GB",
             ramHint = "需 ~3 GB 内存",
             url = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF",
+            downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
             note = "质量更好，中端机可用",
         ),
         RecommendedModel(
@@ -42,6 +49,7 @@ object RecommendedModels {
             sizeLabel = "约 0.8 GB",
             ramHint = "需 ~1.5 GB 内存",
             url = "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF",
+            downloadUrl = "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
             note = "最省资源，英文强",
         ),
         RecommendedModel(
@@ -51,6 +59,7 @@ object RecommendedModels {
             sizeLabel = "约 1.6 GB",
             ramHint = "需 ~2.5 GB 内存",
             url = "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF",
+            downloadUrl = "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
             note = "Google 出品，均衡",
         ),
         RecommendedModel(
@@ -60,6 +69,7 @@ object RecommendedModels {
             sizeLabel = "约 2.4 GB",
             ramHint = "需 ~4 GB 内存",
             url = "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF",
+            downloadUrl = "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf",
             note = "推理能力强，需较好机型",
         ),
     )

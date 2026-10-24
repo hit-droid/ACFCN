@@ -9,6 +9,7 @@ import com.selfmod.agent.container.PackManager
 import com.selfmod.agent.llm.ChatMessage
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.llm.LlmConfig
+import com.selfmod.agent.memory.MemoryService
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.plugin.PluginRegistry
 import com.selfmod.agent.repo.CodeRepository
@@ -150,6 +151,7 @@ class AgentCoreTest {
             models = LocalModelStore(app),
             container = ContainerManager(app),
             packs = PackManager(app.filesDir),
+            memory = MemoryService(app),
         )
         steps.clear(); uiEvents.clear(); calls = 0; cancelOnRequest = false; failNextWith = 0
         responses = mutableListOf()
