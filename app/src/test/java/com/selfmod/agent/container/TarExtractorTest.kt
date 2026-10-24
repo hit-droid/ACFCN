@@ -124,6 +124,26 @@ class TarExtractorTest {
     }
 
     @Test
+    fun `regular file replaces a busybox applet symlink without following it`() {
+        // The minirootfs reserves busybox applet names as symlinks
+        // (/usr/bin/strings -> /bin/busybox); packs shipping the real binary
+        // must replace the link, never write through it into busybox.
+        File(dest, "bin").mkdirs()
+        File(dest, "bin/busybox").writeText("BUSYBOX-BINARY")
+        File(dest, "usr/bin").mkdirs()
+        java.nio.file.Files.createSymbolicLink(
+            File(dest, "usr/bin/strings").toPath(),
+            File(dest, "bin/busybox").toPath(),
+        )
+        val r = extract(Entry("usr/bin/strings", content = "REAL-STRINGS"))
+        assertTrue(r is TarExtractor.Result.Done)
+        val replaced = File(dest, "usr/bin/strings")
+        assertFalse(java.nio.file.Files.isSymbolicLink(replaced.toPath()))
+        assertEquals("REAL-STRINGS", replaced.readText())
+        assertEquals("BUSYBOX-BINARY", File(dest, "bin/busybox").readText())
+    }
+
+    @Test
     fun `GNU LongName entries unpack under the full name`() {
         val long = "a".repeat(150) + ".txt"
         val r = extract(Entry(long, content = "long-name-ok", longName = true))

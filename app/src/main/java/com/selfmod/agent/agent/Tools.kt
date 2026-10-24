@@ -4,6 +4,7 @@ import com.selfmod.agent.browser.BrowserController
 import com.selfmod.agent.browser.BrowserOutcome
 import com.selfmod.agent.container.ContainerManager
 import com.selfmod.agent.container.ContainerSession
+import com.selfmod.agent.container.PackManager
 import com.selfmod.agent.llm.ToolSpec
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.plugin.PluginRegistry
@@ -31,6 +32,7 @@ object Tools {
         browser: BrowserController,
         models: LocalModelStore,
         containerManager: ContainerManager,
+        packManager: PackManager,
     ): List<ToolDef> {
         val base = listOf(
         executeJs(scriptEngine, scriptHost),
@@ -61,13 +63,14 @@ object Tools {
         browserBack(browser),
         listLocalModels(models),
         offlineStatus(settings),
-            linuxExec(containerManager),
+        linuxExec(containerManager),
+        linuxPack(packManager, containerManager),
         )
         // Tools that can run arbitrary code, commands, or load external code are
         // marked HIGH so the approval gate (AgentCore.approvalGate) can pause for
         // the user before they execute. Everything else stays LOW (auto-approved).
         val highRisk = setOf(
-            "execute_js", "install_plugin", "load_plugin", "invoke_plugin", "linux_exec",
+            "execute_js", "install_plugin", "load_plugin", "invoke_plugin", "linux_exec", "linux_pack",
         )
         return base.map { if (it.spec.name in highRisk) it.copy(risk = ToolRisk.HIGH) else it }
     }
@@ -539,6 +542,101 @@ object Tools {
                 out.put("duration_ms", res.durationMs)
                 out.toString()
             }
+        },
+    )
+
+    /**
+     * Toolchain packs for the container: python3, gcc, JDK/kotlinc/d8. A pack
+     * is a verified tarball diff extracted over the container rootfs — no apk
+     * tooling or network inside the container is needed. Installs are
+     * idempotent and sha256-pinned; `remove` is reference-counted.
+     */
+    private fun linuxPack(packs: PackManager, container: ContainerManager) = ToolDef(
+        spec = ToolSpec(
+            name = "linux_pack",
+            description = "Manage toolchain packs for the embedded Linux container. Packs add software that is not in the base rootfs: python3 (with ssl/ctypes/json), gcc (C/C++), jdk (OpenJDK 17 + kotlinc + d8 for producing dex). action=list shows what is available and installed; action=install downloads, sha256-verifies and extracts a pack (tens of MB — only do it when the task really needs it); action=remove uninstalls and frees space (files shared with other packs are kept); action=status shows one pack. After installing, the tools are immediately usable in linux_exec.",
+            parameters = """{"type":"object","properties":{"action":{"type":"string","enum":["list","install","remove","status"],"description":"What to do (default: install)"},"pack":{"type":"string","description":"Pack id: python3 | gcc | jdk (required for install/remove/status)"}},"required":[]}""",
+        ),
+        run = { args ->
+            val o = JSONObject(args)
+            val action = o.optString("action").ifBlank { "install" }
+            val packId = o.optString("pack")
+            val out = JSONObject()
+            when (action) {
+                "list" -> {
+                    out.put("ok", true)
+                    out.put("packs", JSONArray().apply {
+                        packs.list().forEach { st ->
+                            put(JSONObject().apply {
+                                put("id", st.pack.id)
+                                put("name", st.pack.displayName)
+                                put("installed", st.isInstalled)
+                                put("published", st.pack.isPublished)
+                                put("provides", st.pack.provides.joinToString(","))
+                                put("size_mb", if (st.pack.sizeBytes > 0) st.pack.sizeBytes / 1048576 else JSONObject.NULL)
+                            })
+                        }
+                    })
+                }
+                "status" -> {
+                    if (packId.isBlank()) {
+                        out.put("ok", false)
+                        out.put("error", "pack required for status")
+                    } else {
+                        val st = packs.list().firstOrNull { it.pack.id == packId.trim().lowercase() }
+                        if (st == null) {
+                            out.put("ok", false)
+                            out.put("error", "unknown pack: $packId")
+                        } else {
+                            out.put("ok", true)
+                            out.put("id", st.pack.id)
+                            out.put("installed", st.isInstalled)
+                            out.put("installed_files", st.installed?.files?.size ?: 0)
+                        }
+                    }
+                }
+                "install", "remove" -> {
+                    if (packId.isBlank()) {
+                        out.put("ok", false)
+                        out.put("error", "pack required for ${action}")
+                    } else {
+                        val result = if (action == "install") {
+                            packs.install(packId.trim().lowercase())
+                        } else {
+                            packs.remove(packId.trim().lowercase())
+                        }
+                        when (result) {
+                            is PackManager.Result.Done -> {
+                                // Bundles may carry a post-install hook (the apk
+                                // world would run triggers here: ldconfig,
+                                // ca-certificates…). Run it once, inside the
+                                // container, best-effort.
+                                val hookNote = result.postInstallScript?.let { script ->
+                                    val r = container.exec("/bin/sh $script", timeoutMs = 120_000)
+                                    if (r.exitCode == 0) "post-install 完成"
+                                    else "post-install 失败: ${r.stderr.take(300)}"
+                                }
+                                out.put("ok", true)
+                                out.put("action", action)
+                                out.put("pack", result.pack.id)
+                                out.put("files", result.fileCount)
+                                out.put("bytes", result.downloadedBytes)
+                                hookNote?.let { out.put("note", it) }
+                            }
+                            is PackManager.Result.Failed -> {
+                                out.put("ok", false)
+                                out.put("action", action)
+                                out.put("error", result.reason)
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    out.put("ok", false)
+                    out.put("error", "unknown action: $action (list|install|remove|status)")
+                }
+            }
+            out.toString()
         },
     )
 }

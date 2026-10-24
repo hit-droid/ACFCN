@@ -5,6 +5,7 @@ import android.util.Log
 import com.selfmod.agent.agent.AgentCore
 import com.selfmod.agent.browser.BrowserController
 import com.selfmod.agent.container.ContainerManager
+import com.selfmod.agent.container.PackManager
 import com.selfmod.agent.llm.ConnectionTester
 import com.selfmod.agent.llm.LlmClient
 import com.selfmod.agent.offline.LocalModelStore
@@ -115,6 +116,7 @@ class App : Application() {
     private var _crashStore: CrashStore? = null
     private var _storage: StorageStats? = null
     private var _container: ContainerManager? = null
+    private var _packs: PackManager? = null
 
     // uiQueue is constructed eagerly and never fails in practice; guarded by a
     // nullable indirection so a future failure path can't take down every collector.
@@ -232,6 +234,10 @@ class App : Application() {
         // on the first linux_exec call, so a broken asset can never block startup.
         runFeature("container") {
             _container = ContainerManager(this)
+            _packs = PackManager(
+                filesDir = filesDir,
+                ensureRootfs = { _container?.ensureReady() is ContainerManager.Result.Ready },
+            )
         }
     }
 
@@ -241,7 +247,7 @@ class App : Application() {
         // than a half-built AgentCore that crashes on its first tool call.
         if (_settings == null || _repo == null || _plugins == null ||
             _llmClient == null || _scriptEngine == null || _browser == null ||
-            _models == null || _container == null
+            _models == null || _container == null || _packs == null
         ) {
             Log.w(TAG, "app_init agent skipped — missing dependency")
             _failedFeatures.add("agent")
@@ -267,6 +273,7 @@ class App : Application() {
                 browser = _browser!!,
                 models = _models!!,
                 container = _container!!,
+                packs = _packs!!,
             )
         }
     }
