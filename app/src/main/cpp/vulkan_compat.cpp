@@ -1,6 +1,6 @@
 // Vulkan 1.1 compatibility shim for the ggml-vulkan backend.
 //
-// ggml-vulkan (llama.cpp b11179) calls vkGetPhysicalDeviceFeatures2() directly
+// ggml-vulkan (llama.cpp b11640) calls vkGetPhysicalDeviceFeatures2() directly
 // at three sites (device feature probing for 16-bit storage / cooperative
 // matrix support). That is a Vulkan 1.1 entry point: the NDK's libvulkan.so
 // stub only exports it for API level 28+, and Android 8.0/8.1 (API 26/27,
@@ -16,6 +16,7 @@
 
 #include <cstring>
 #include <dlfcn.h>
+#include <stdlib.h>
 
 extern "C" {
 #include <vulkan/vulkan.h>
@@ -77,3 +78,24 @@ extern "C" void vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice, Vk
     // features. ggml then disables the 1.1/coopmat code paths.
     vulkan_compat_zero_features2(pFeatures);
 }
+
+// aligned_alloc() for API < 28. bionic only exports it from API 28, but
+// ggml-vulkan (llama.cpp >= ~b11640) calls std::aligned_alloc() — a
+// using-declaration of ::aligned_alloc — unconditionally on non-Windows.
+// android_aligned_alloc_compat.h (force-included into ggml-vulkan's TUs,
+// see CMakeLists.txt) declares the symbol for API < 28 so the reference
+// resolves; this provides the implementation. posix_memalign is POSIX and
+// available since API 1; it is slightly more permissive than C11
+// aligned_alloc (no size-multiple-of-alignment requirement), which is
+// harmless for the backend's use. On API 28+ this compiles to nothing and
+// the platform symbol is used.
+#if defined(__ANDROID_API__) && __ANDROID_API__ < 28
+extern "C" void *aligned_alloc(size_t alignment, size_t size)
+{
+    void *ptr = nullptr;
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        return nullptr;
+    }
+    return ptr;
+}
+#endif

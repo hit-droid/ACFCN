@@ -76,13 +76,38 @@ if(ACFCN_ENABLE_VULKAN)
     set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE NEVER)
 endif()
 
+# b11640 = commit 3e390af18de1131dda27913c00511725b4274c8a (2026-10-15),
+# over the previous b11179 (2026-09-25) for:
+#   * #30215 vulkan: L2-friendly workgroup scheduling for the cm2 mulmat —
+#     the decode-time matmul on the target device's Adreno 740
+#   * #29639 quantized-KV (q4_0/q8_0) flash attention support on Vulkan,
+#     which our default q8_0 KV + FA path depends on
+#   * Adreno OpenCL fixes (#30176 compile fix, #30041 xmem OOB) and several
+#     Vulkan FA correctness fixes (#29591 / #29988 / #30003)
+# API compatibility for every llama_/ggml_ symbol acfcn_llm.cpp uses was
+# verified symbol-by-symbol against this tag's llama.h / ggml.h /
+# ggml-backend.h; the llama_batch API churn (#29622) does not touch
+# llama_batch_get_one, our only usage.
 FetchContent_Declare(
     llama
     GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
-    GIT_TAG        b11179
+    GIT_TAG        b11640
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(llama)
+
+# ggml-vulkan (llama.cpp >= ~b11640) calls std::aligned_alloc(), which
+# bionic only exports from API 28 — with minSdk 26 the build dies with
+# "reference to unresolved using declaration". Force-include a shim that
+# declares ::aligned_alloc for API < 28; the implementation is in
+# vulkan_compat.cpp (same pattern as the vkGetPhysicalDeviceFeatures2
+# shim below). Applied surgically to ggml-vulkan only — it is the sole
+# user of aligned_alloc in the backends we build (ggml-rpc / ggml-sycl
+# are not enabled).
+if(TARGET ggml-vulkan)
+    target_compile_options(ggml-vulkan PRIVATE
+        "-include${CMAKE_CURRENT_SOURCE_DIR}/android_aligned_alloc_compat.h")
+endif()
 
 add_library(acfcn_llm SHARED
     acfcn_llm.cpp

@@ -192,9 +192,19 @@ class LocalLlmEngine : OnDeviceEngine {
     /** The chat template the model reports (falls back to "chatml"). */
     override fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
 
+    /**
+     * Decode thread count. The target device (Snapdragon 8+ Gen 1) is 1x X2 +
+     * 3x A710 (Linux CPU 0-3) + 4x A510 (CPU 4-7). Binding the llama
+     * threadpools to the big cluster only (apply_cpu_affinity in
+     * acfcn_llm.cpp) with 4 threads measured faster than 6 threads across
+     * both clusters on this SoC class (paragon83114/llama-adreno: 4t on
+     * cores 0-3 = 31.4±0.0 vs 6t = 30.5±1.5 tok/s, tg128), so the default
+     * is capped at 4. Override at runtime:
+     * adb shell setprop debug.acfcn.threads N
+     */
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
-        return cores.coerceIn(2, 6)
+        return cores.coerceIn(2, 4)
     }
 
     private external fun nativeInit(
