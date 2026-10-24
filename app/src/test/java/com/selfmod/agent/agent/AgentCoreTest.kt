@@ -153,6 +153,9 @@ class AgentCoreTest {
         )
         steps.clear(); uiEvents.clear(); calls = 0; cancelOnRequest = false; failNextWith = 0
         responses = mutableListOf()
+        // Tests exercise tool behaviour directly; approve every call by default so
+        // the high-risk gate (which only the UI host configures) doesn't veto them.
+        core.approvalGate = { _, _ -> true }
     }
 
     @After
@@ -440,5 +443,26 @@ class AgentCoreTest {
         val toolMsg = history.first { it.role == "tool" }
         assertTrue("expected an error envelope, got ${toolMsg.content}",
             toolMsg.content.contains("tool error") || toolMsg.content.contains("\"ok\":false"))
+    }
+
+    @Test
+    fun `high-risk tool is skipped when the approval gate denies it`() {
+        nonNative()
+        responses.add(sseToolCalls(Triple("c1", "execute_js", """{"code":"1+1"}""")))
+        responses.add(sseContent("done"))
+        core.approvalGate = { _, _ -> false }
+        run()
+        assertTrue("execute_js should be blocked by the gate", !actions().contains("execute_js"))
+        assertTrue("expected an authorization-skip note", observations().any { "未获授权" in it })
+    }
+
+    @Test
+    fun `high-risk tool runs once the approval gate approves it`() {
+        nonNative()
+        responses.add(sseToolCalls(Triple("c1", "execute_js", """{"code":"1+1"}""")))
+        responses.add(sseContent("done"))
+        core.approvalGate = { _, _ -> true }
+        run()
+        assertTrue("execute_js should run after approval", actions().contains("execute_js"))
     }
 }

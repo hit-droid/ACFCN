@@ -35,6 +35,14 @@ class AgentCore(
 
     private val cancelled = AtomicBoolean(false)
 
+    /**
+     * Gate for high-risk tools (see [ToolRisk]). Default rejects everything
+     * (fail-closed): a caller that never configures it cannot silently run
+     * code-execution tools. UI hosts inject a gate that suspends until the user
+     * decides, then resumes with the verdict.
+     */
+    var approvalGate: suspend (name: String, args: String) -> Boolean = { _, _ -> false }
+
     /** Detects the model re-issuing an identical call (H4). */
     private val loopGuard = ToolLoopGuard()
 
@@ -144,6 +152,19 @@ class AgentCore(
                         observations.add(name to note)
                     }
                     continue
+                }
+                if (tools.riskOf(name) == ToolRisk.HIGH) {
+                    val approved = approvalGate(name, args)
+                    if (!approved) {
+                        val note = "工具 $name 属于高危操作，未获授权，已跳过执行。"
+                        onStep(AgentStep.Observation(note))
+                        if (nativeTools) {
+                            history.add(ChatMessage(role = "tool", content = note, name = name, toolCallId = tc.id))
+                        } else {
+                            observations.add(name to note)
+                        }
+                        continue
+                    }
                 }
                 onStep(AgentStep.Action(name, args))
                 val out = tools.invoke(name, args)

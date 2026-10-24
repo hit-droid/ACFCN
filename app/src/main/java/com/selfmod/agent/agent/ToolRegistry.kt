@@ -3,9 +3,13 @@ package com.selfmod.agent.agent
 import com.selfmod.agent.llm.ToolSpec
 import org.json.JSONObject
 
+/** Risk category used by the approval gate (see [AgentCore]). */
+enum class ToolRisk { LOW, HIGH }
+
 /** A single tool the LLM can call: its spec plus the executor. */
 data class ToolDef(
     val spec: ToolSpec,
+    val risk: ToolRisk = ToolRisk.LOW,
     val run: (argsJson: String) -> String,   // returns a JSON string for the LLM
 )
 
@@ -16,6 +20,9 @@ class ToolRegistry {
     fun registerAll(defs: List<ToolDef>) { defs.forEach { register(it) } }
 
     fun specs(): List<ToolSpec> = tools.values.map { it.spec }
+
+    /** Risk level of a registered tool, or [ToolRisk.LOW] for unknown names. */
+    fun riskOf(name: String): ToolRisk = tools[name]?.risk ?: ToolRisk.LOW
 
     fun invoke(name: String, argsJson: String): String {
         val t = tools[name]
