@@ -1,5 +1,6 @@
 // ACFCN on-device GGUF inference bridge over llama.cpp.
-// All public llama.cpp symbols used here are verified against tag b11179.
+// All public llama.cpp symbols used here are verified against tag b11640
+// (commit 3e390af18de1131dda27913c00511725b4274c8a).
 
 #include <jni.h>
 #include <android/log.h>
@@ -19,6 +20,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/system_properties.h>
+#include <sched.h>
+#include <cerrno>
 
 #include "llama.h"
 
@@ -75,6 +78,8 @@ static void llama_log_to_logcat(enum ggml_log_level level, const char *text, voi
 //   adb shell setprop debug.acfcn.gpu_layers 99 # offload all layers to GPU
 //   adb shell setprop debug.acfcn.gpu_layers 0  # force CPU
 //   adb shell setprop debug.acfcn.threads 8     # override thread count
+//   adb shell setprop debug.acfcn.cpu_affinity 0-3  # pin engine to big cores ("none" = off)
+//   adb shell setprop debug.acfcn.opencl_xmem 0    # disable Adreno xmem GEMM (default on)
 // Property changes take effect on the next model load.
 static int get_property_int(const char *name, int fallback) {
     char value[PROP_VALUE_MAX] = {0};
@@ -333,6 +338,108 @@ void install_signal_handlers() {
     sigaction(SIGBUS, &sa, nullptr);
 }
 
+// ---------------------------------------------------------------------------
+// CPU affinity pinning for the engine thread
+//
+// The target device (Honor 90 GT, Snapdragon 8+ Gen 1) is 1x Cortex-X2 +
+// 3x Cortex-A710 (Linux CPU 0-3, the big cluster) + 4x Cortex-A510 (CPU 4-7).
+// Cross-cluster decode with 6 threads spreads work over the little cores,
+// dragging per-token latency to the slowest cluster's memory pipeline and
+// adding scheduler noise. Community measurement on this same SoC class
+// (paragon83114/llama-adreno) showed 4 threads bound to cores 0-3 beating 6
+// threads across both clusters: tg128 31.4±0.0 vs 30.5±1.5 tok/s.
+//
+// llama.cpp spawns its compute threadpools (n_threads and n_threads_batch)
+// from whichever thread calls llama_init_from_model() — the nativeInit JNI
+// thread — and pool threads inherit the creator's affinity mask. Pinning
+// *this* thread once therefore covers both pools for the whole context
+// lifetime; the caller thread itself only orchestrates decode.
+//
+//   debug.acfcn.cpu_affinity = 0-3   (default; comma-separated ranges: 0-3,7)
+//   debug.acfcn.cpu_affinity = none  (disable: kernel default placement)
+// The requested mask is intersected with this process's actually-allowed
+// set (cpuset / cgroup restrictions, e.g. background app limits), so a
+// restricted device degrades to fewer cores instead of failing to start.
+void apply_cpu_affinity() {
+    char value[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.acfcn.cpu_affinity", value);
+    const std::string spec(value[0] ? value : "0-3");
+    if (spec == "none" || spec == "off" || spec == "false") {
+        LOGI("cpu affinity: disabled by property (kernel default placement)");
+        return;
+    }
+
+    auto is_num = [](const std::string &s) {
+        if (s.empty()) return false;
+        for (char c : s) if (c < '0' || c > '9') return false;
+        return true;
+    };
+
+    cpu_set_t want;
+    CPU_ZERO(&want);
+    int added = 0;
+    size_t i = 0;
+    while (i < spec.size()) {
+        size_t comma = spec.find(',', i);
+        if (comma == std::string::npos) comma = spec.size();
+        const std::string item = spec.substr(i, comma - i);
+        i = comma + 1;
+        const size_t dash = item.find('-');
+        long lo = 0, hi = -1;
+        if (dash == std::string::npos) {
+            if (is_num(item)) { lo = hi = strtol(item.c_str(), nullptr, 10); }
+        } else {
+            const std::string a = item.substr(0, dash);
+            const std::string b = item.substr(dash + 1);
+            if (is_num(a) && is_num(b)) {
+                lo = strtol(a.c_str(), nullptr, 10);
+                hi = strtol(b.c_str(), nullptr, 10);
+                if (lo > hi) std::swap(lo, hi);
+            }
+        }
+        for (long v = lo; v <= hi && v >= 0 && v < CPU_SETSIZE; ++v) {
+            CPU_SET((int) v, &want);
+            ++added;
+        }
+    }
+    if (added == 0) {
+        LOGI("cpu affinity: unparseable spec \"%s\"; leaving default placement", spec.c_str());
+        return;
+    }
+
+    // Intersect with what this process is actually allowed to run on.
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
+        LOGI("cpu affinity: sched_getaffinity failed (%s); leaving default placement",
+             strerror(errno));
+        return;
+    }
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        if (CPU_ISSET(cpu, &want) && !CPU_ISSET(cpu, &allowed)) CPU_CLR(cpu, &want);
+    }
+    std::string mask;
+    int n = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        if (CPU_ISSET(cpu, &want)) {
+            if (!mask.empty()) mask += ',';
+            mask += std::to_string(cpu);
+            ++n;
+        }
+    }
+    if (n == 0) {
+        LOGI("cpu affinity: requested mask disjoint from the allowed set; leaving default placement");
+        return;
+    }
+    if (sched_setaffinity(0, sizeof(want), &want) != 0) {
+        LOGI("cpu affinity: sched_setaffinity({%s}) failed (%s); leaving default placement",
+             mask.c_str(), strerror(errno));
+        return;
+    }
+    LOGI("cpu affinity: engine thread pinned to cpu {%s} (llama threadpools inherit;"
+         " override: debug.acfcn.cpu_affinity)", mask.c_str());
+}
+
 } // namespace
 
 #ifdef ACFCN_USE_OPENCL
@@ -430,8 +537,33 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     g_engine.abort_flag.store(false);
     free_locked();
 
+    // Must run before llama_init_from_model(): the compute threadpools are
+    // created there and inherit this thread's affinity mask.
+    apply_cpu_affinity();
+
 #ifdef ACFCN_USE_OPENCL
     ensure_opencl_icd_configured();
+    // Adreno xmem F16xF32 GEMM is ON by default since the llama.cpp b11640
+    // bump (commit 3e390af, see CMakeLists.txt) — the backend logs "Adreno
+    // xmem F16xF32 GEMM enabled" when the device accepts it. This is only
+    // the escape hatch to force it back off (A/B, or a driver that
+    // misbehaves with the temporary weight prepack). Note the path only
+    // applies to f16/BF16-weight GEMMs (M>=64 prefill), so it is a no-op
+    // for most quantized models.
+    {
+        char xmem[PROP_VALUE_MAX] = {0};
+        const int len = __system_property_get("debug.acfcn.opencl_xmem", xmem);
+        if (len > 0) {
+            const std::string v(xmem);
+            if (v == "0" || v == "off" || v == "false") {
+                setenv("GGML_OPENCL_ADRENO_XMEM_GEMM", "0", 1);
+                LOGI("opencl: Adreno xmem GEMM disabled via debug.acfcn.opencl_xmem=0");
+            } else {
+                setenv("GGML_OPENCL_ADRENO_XMEM_GEMM", "1", 1);
+                LOGI("opencl: Adreno xmem GEMM force-enabled via debug.acfcn.opencl_xmem");
+            }
+        }
+    }
 #endif
     llama_backend_init();
     { std::lock_guard<std::mutex> lk(g_gpu_log_mu); g_gpu_log.clear(); g_load_info.clear(); }
