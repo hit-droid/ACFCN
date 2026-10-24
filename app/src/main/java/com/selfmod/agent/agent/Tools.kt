@@ -6,6 +6,7 @@ import com.selfmod.agent.container.ContainerManager
 import com.selfmod.agent.container.ContainerSession
 import com.selfmod.agent.container.PackManager
 import com.selfmod.agent.llm.ToolSpec
+import com.selfmod.agent.memory.MemoryService
 import com.selfmod.agent.offline.LocalModelStore
 import com.selfmod.agent.plugin.PluginRegistry
 import com.selfmod.agent.repo.CodeRepository
@@ -33,6 +34,7 @@ object Tools {
         models: LocalModelStore,
         containerManager: ContainerManager,
         packManager: PackManager,
+        memory: MemoryService,
     ): List<ToolDef> {
         val base = listOf(
         executeJs(scriptEngine, scriptHost),
@@ -46,12 +48,13 @@ object Tools {
         listPlugins(plugins),
         invokePlugin(plugins),
         unloadPlugin(plugins),
-        installPlugin(repo, plugins),
+        installPlugin(repo, plugins, settings),
         getMemory(settings),
         setMemory(settings),
         listMemory(settings),
-        httpGet(scriptHost),
-        httpPost(scriptHost),
+        remember(memory),
+        httpGet(scriptHost, settings),
+        httpPost(scriptHost, settings),
         uiNotify(uiNotifier),
         browserOpen(browser),
         browserSnapshot(browser),
@@ -250,11 +253,11 @@ object Tools {
         },
     )
 
-    private fun installPlugin(repo: CodeRepository, plugins: PluginRegistry) = ToolDef(
+    private fun installPlugin(repo: CodeRepository, plugins: PluginRegistry, settings: SettingsStore) = ToolDef(
         spec = ToolSpec(
             name = "install_plugin",
-            description = "Install a dex plugin from a base64 payload, then optionally load it. entry is the fully-qualified Java class implementing SelfModPlugin.",
-            parameters = """{"type":"object","properties":{"name":{"type":"string"},"entry":{"type":"string"},"dex_b64":{"type":"string"},"load":{"type":"boolean"}},"required":["name","entry","dex_b64"]}""",
+            description = "Install a dex plugin from a base64 payload, then optionally load it. entry is the fully-qualified Java class implementing SelfModPlugin. permissions is an optional JSON array of capability strings the plugin declares (e.g. [\"network\",\"file_read\"]) — shown to the user for approval before the plugin runs.",
+            parameters = """{"type":"object","properties":{"name":{"type":"string"},"entry":{"type":"string"},"dex_b64":{"type":"string"},"permissions":{"type":"string","description":"Optional JSON array of declared permission strings, e.g. [\"network\",\"file_read\"]"},"load":{"type":"boolean"}},"required":["name","entry","dex_b64"]}""",
         ),
         run = { args ->
             val o = JSONObject(args)
@@ -262,15 +265,28 @@ object Tools {
             val entry = o.getString("entry")
             val b64 = o.getString("dex_b64")
             val load = o.optBoolean("load", true)
+            val perms = o.optString("permissions", "[]")
             val bytes = runCatching {
                 android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
             }
             if (bytes.isFailure) {
                 ToolRegistry.errJson("invalid base64: ${bytes.exceptionOrNull()?.message}")
             } else {
+                // P1-3: persist the plugin's declared permission manifest so the
+                // approval dialog can surface what it claims to do.
+                val declared = runCatching {
+                    val arr = org.json.JSONArray(perms)
+                    val set = LinkedHashSet<String>()
+                    for (i in 0 until arr.length()) set.add(arr.optString(i))
+                    set.toList()
+                }.getOrDefault(emptyList())
+                settings.setPluginPermissions(name, declared)
                 repo.installPlugin(name, bytes.getOrNull()!!, entry)
                 if (load) plugins.load(name)
-                ToolRegistry.okJson("installed", mapOf("name" to name, "entry" to entry, "loaded" to load))
+                ToolRegistry.okJson(
+                    "installed",
+                    mapOf("name" to name, "entry" to entry, "loaded" to load, "permissions" to declared),
+                )
             }
         },
     )
@@ -312,9 +328,27 @@ object Tools {
         run = { JSONArray(settings.memoryKeys()).toString() },
     )
 
+    // --------------------------------------------------- long-term memory
+
+    private fun remember(memory: MemoryService) = ToolDef(
+        spec = ToolSpec(
+            name = "remember",
+            description = "Persist a durable fact the agent should carry across sessions: a user preference, a lesson learned, or a key fact. kind is one of general|user|preference|lesson. Recalled facts are injected into future prompts automatically.",
+            parameters = """{"type":"object","properties":{"text":{"type":"string","description":"The fact to remember"},"kind":{"type":"string","enum":["general","user","preference","lesson"],"description":"What kind of memory this is (default: general)"}},"required":["text"]}""",
+        ),
+        run = { args ->
+            val o = JSONObject(args)
+            val text = o.getString("text")
+            val kind = o.optString("kind", "general")
+                .let { k -> MemoryService.Kind.entries.firstOrNull { it.value == k } ?: MemoryService.Kind.GENERAL }
+            val m = memory.record(text, kind)
+            ToolRegistry.okJson("remembered", mapOf("id" to m.id, "kind" to m.kind))
+        },
+    )
+
     // --------------------------------------------------------------- http
 
-    private fun httpGet(host: ScriptApi) = ToolDef(
+    private fun httpGet(host: ScriptApi, settings: SettingsStore) = ToolDef(
         spec = ToolSpec(
             name = "http_get",
             description = "Perform an HTTP GET. headers is a JSON object of header->value.",
@@ -323,12 +357,19 @@ object Tools {
         run = { args ->
             val o = JSONObject(args)
             val url = o.getString("url")
-            val headers = o.optString("headers", "{}")
-            ToolRegistry.okJson("done", mapOf("status" to "ok", "body" to host.httpGet(url, headers).take(8000)))
+            // P1-5: hard SSRF guard — never let the model reach loopback, the
+            // cloud metadata endpoint, or (in online mode) private ranges.
+            when (val v = HttpGuard.check(url, settings.offlineMode())) {
+                is HttpGuard.Verdict.Deny -> ToolRegistry.errJson("URL 被安全策略拒绝：${v.reason}")
+                is HttpGuard.Verdict.Allow -> {
+                    val headers = o.optString("headers", "{}")
+                    ToolRegistry.okJson("done", mapOf("status" to "ok", "body" to host.httpGet(v.url, headers).take(8000)))
+                }
+            }
         },
     )
 
-    private fun httpPost(host: ScriptApi) = ToolDef(
+    private fun httpPost(host: ScriptApi, settings: SettingsStore) = ToolDef(
         spec = ToolSpec(
             name = "http_post",
             description = "Perform an HTTP POST with a string body. headers is a JSON object.",
@@ -337,9 +378,14 @@ object Tools {
         run = { args ->
             val o = JSONObject(args)
             val url = o.getString("url")
-            val body = o.getString("body")
-            val headers = o.optString("headers", "{}")
-            ToolRegistry.okJson("done", mapOf("status" to "ok", "body" to host.httpPost(url, body, headers).take(8000)))
+            when (val v = HttpGuard.check(url, settings.offlineMode())) {
+                is HttpGuard.Verdict.Deny -> ToolRegistry.errJson("URL 被安全策略拒绝：${v.reason}")
+                is HttpGuard.Verdict.Allow -> {
+                    val body = o.getString("body")
+                    val headers = o.optString("headers", "{}")
+                    ToolRegistry.okJson("done", mapOf("status" to "ok", "body" to host.httpPost(v.url, body, headers).take(8000)))
+                }
+            }
         },
     )
 

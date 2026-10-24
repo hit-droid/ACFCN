@@ -2,6 +2,7 @@ package com.selfmod.agent.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -42,6 +43,8 @@ import com.selfmod.agent.ui.theme.Danger
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -325,5 +328,118 @@ fun ConfigScreen(vm: AgentViewModel) {
         if (storageMsg.isNotBlank()) {
             Text(storageMsg, color = AccentGreen, fontSize = 12.sp)
         }
+
+        // ---- P0-2: persistent high-risk tool approvals + audit ----
+        Spacer(Modifier.height(8.dp))
+        Text("高危工具授权", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
+        Text(
+            "勾选「始终允许」的高危工具会出现在这里，跨会话保留。授权 / 拒绝都会被记录到审计日志。",
+            color = TextSecondary, fontSize = 12.sp,
+        )
+        val approved by vm.approvedTools.collectAsState()
+        if (approved.isEmpty()) {
+            Text("（还没有始终允许的工具）", color = TextSecondary, fontSize = 13.sp)
+        } else {
+            approved.forEach { name ->
+                Row(
+                    Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(name, color = AccentGreen, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = { vm.revokeApproval(name) }) { Text("撤销", fontSize = 12.sp) }
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text("授权审计日志", color = TextSecondary, fontSize = 12.sp)
+        val log by vm.approvalLog.collectAsState()
+        if (log.isEmpty()) {
+            Text("（空）", color = TextSecondary, fontSize = 13.sp)
+        } else {
+            Column(
+                Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+                log.take(40).forEach { e ->
+                    val verdict = if (e.granted) "允许" else "拒绝"
+                    val color = if (e.granted) AccentGreen else Danger
+                    Row(Modifier.fillMaxWidth()) {
+                        Text(fmt.format(java.util.Date(e.ts)), color = TextSecondary, fontSize = 11.sp, modifier = Modifier.width(72.dp))
+                        Text("$verdict · ${e.tool}", color = color, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text(e.source, color = TextSecondary, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+
+        // ---- P2-7: in-app model downloader ----
+        Spacer(Modifier.height(8.dp))
+        Text("模型下载（应用内）", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
+        Text(
+            "点「下载」直接抓取并导入本地模型，导入后可在「模型」页一键加载。下载受 SSRF 防护，仅允许公网 / 局域网地址。",
+            color = TextSecondary, fontSize = 12.sp,
+        )
+        val dlProgress by vm.downloadProgress.collectAsState()
+        val dlStatus by vm.downloadStatus.collectAsState()
+        vm.recommendedModels.forEach { rec ->
+            val prog = dlProgress[rec.name]
+            Column(
+                Modifier.fillMaxWidth().background(SurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${rec.name}  ·  ${rec.params}  ·  ${rec.quant}", color = TextPrimary, fontSize = 13.sp)
+                        Text("${rec.sizeLabel} · ${rec.ramHint} · ${rec.note}", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    if (prog != null) {
+                        Text("下载中", color = AccentBlue, fontSize = 12.sp)
+                    } else {
+                        OutlinedButton(onClick = { vm.downloadModel(rec) }) { Text("下载", fontSize = 12.sp) }
+                    }
+                }
+                if (prog != null) {
+                    MiniBar(prog)
+                    Text(dlStatus[rec.name].orEmpty(), color = TextSecondary, fontSize = 11.sp)
+                } else if (dlStatus[rec.name]?.startsWith("失败") == true) {
+                    Text(dlStatus[rec.name].orEmpty(), color = Danger, fontSize = 11.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text("粘贴直链下载", color = TextSecondary, fontSize = 12.sp)
+        var manualUrl by remember { mutableStateOf("") }
+        var manualName by remember { mutableStateOf("") }
+        OutlinedTextField(
+            value = manualUrl,
+            onValueChange = { manualUrl = it },
+            label = { Text("模型直链 (https://…/xxx.gguf)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = manualName,
+            onValueChange = { manualName = it },
+            label = { Text("文件名（可选，留空用链接末段）") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        val manualBusy = dlProgress.any { it.value >= 0f }
+        OutlinedButton(
+            onClick = { if (manualUrl.isNotBlank()) { vm.downloadFromUrl(manualUrl.trim(), manualName.trim()); manualUrl = "" } },
+            enabled = manualUrl.isNotBlank() && !manualBusy,
+        ) { Text("下载直链", fontSize = 12.sp) }
+    }
+}
+
+/** Tiny determinate progress bar — avoids Material3 version-specific progress APIs. */
+@Composable
+private fun MiniBar(progress: Float) {
+    val frac = if (progress < 0f) 0f else progress.coerceIn(0f, 1f)
+    Box(
+        Modifier.fillMaxWidth().height(6.dp).background(SurfaceVariant, RoundedCornerShape(3.dp)),
+    ) {
+        Box(Modifier.fillMaxWidth(frac).height(6.dp).background(AccentBlue, RoundedCornerShape(3.dp)))
     }
 }

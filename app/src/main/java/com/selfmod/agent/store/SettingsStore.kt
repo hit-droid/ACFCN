@@ -13,9 +13,19 @@ class SettingsStore(context: Context) {
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val secrets = SecretStore(context)
 
+    /**
+     * P1-4: agent memory now lives in an encrypted SharedPreferences rather than the
+     * plaintext `mem_*` keys, so facts the agent is told to remember can't be read
+     * back out of a world-readable prefs file or an `adb backup`.
+     */
+    private val secureMemory = SecureMemoryStore(context, prefs).also { it.migrateIfNeeded() }
+
     val keysEncrypted: Boolean get() = secrets.encrypted
 
     val keysInitIssue: String? get() = secrets.initIssue
+
+    /** True once the encrypted memory backend initialised (false ⇒ legacy fallback). */
+    val memoryEncrypted: Boolean get() = secureMemory.available
 
     /**
      * M5 — moves the legacy-key migration out of the read path. Old versions of
@@ -141,18 +151,100 @@ class SettingsStore(context: Context) {
         prefs.edit().putString(KEY_CURRENT_SESSION, id).apply()
     }
 
-    fun memoryGet(key: String): String? = prefs.getString("$MEM_PREFIX$key", null)
+    fun memoryGet(key: String): String? = secureMemory.get(key)
 
     fun memorySet(key: String, value: String) {
-        prefs.edit().putString("$MEM_PREFIX$key", value).apply()
+        secureMemory.set(key, value)
     }
 
-    fun memoryKeys(): List<String> = prefs.all.keys
-        .filter { it.startsWith(MEM_PREFIX) }
-        .map { it.removePrefix(MEM_PREFIX) }
-        .sorted()
+    fun memoryKeys(): List<String> = secureMemory.keys()
 
-    fun memoryClear(key: String) = prefs.edit().remove("$MEM_PREFIX$key").apply()
+    fun memoryClear(key: String) = secureMemory.remove(key)
+
+    // ---- P0-2: persistent high-risk tool approvals + audit log ----
+
+    /**
+     * Tools the user chose to "always allow". Persisted so the choice survives a
+     * process restart (the in-memory [AgentViewModel.alwaysAllow] set is seeded
+     * from this on startup).
+     */
+    fun approvedTools(): Set<String> =
+        runCatching { JSONArray(prefs.getString(KEY_APPROVED, "[]")).let { arr -> (0 until arr.length()).map { arr.optString(it) }.toSet() } }
+            .getOrDefault(emptySet())
+
+    fun addApprovedTool(name: String) {
+        val set = approvedTools() + name
+        prefs.edit().putString(KEY_APPROVED, JSONArray(set).toString()).apply()
+    }
+
+    fun removeApprovedTool(name: String) {
+        val set = approvedTools() - name
+        prefs.edit().putString(KEY_APPROVED, JSONArray(set).toString()).apply()
+    }
+
+    fun isToolApproved(name: String): Boolean = name in approvedTools()
+
+    /**
+     * Append-only audit trail of every approval / denial decision, with the source
+     * ("persisted" = auto-approved from the stored allow-list, "user" = explicit tap,
+     * "denied" = explicit denial). Capped at [APPROVAL_LOG_MAX] entries.
+     */
+    fun approvalLog(): List<ApprovalEntry> {
+        val raw = prefs.getString(KEY_APPROVAL_LOG, null) ?: return emptyList()
+        val arr = runCatching { JSONArray(raw) }.getOrDefault(JSONArray())
+        val out = ArrayList<ApprovalEntry>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            out += ApprovalEntry(
+                ts = o.optLong("ts"),
+                tool = o.optString("tool"),
+                granted = o.optBoolean("granted"),
+                source = o.optString("source"),
+            )
+        }
+        return out
+    }
+
+    fun logApproval(tool: String, granted: Boolean, source: String) {
+        val list = approvalLog().toMutableList()
+        list.add(0, ApprovalEntry(System.currentTimeMillis(), tool, granted, source))
+        val trimmed = if (list.size > APPROVAL_LOG_MAX) list.take(APPROVAL_LOG_MAX) else list
+        val arr = JSONArray()
+        trimmed.forEach { e ->
+            arr.put(JSONObject().apply {
+                put("ts", e.ts); put("tool", e.tool)
+                put("granted", e.granted); put("source", e.source)
+            })
+        }
+        prefs.edit().putString(KEY_APPROVAL_LOG, arr.toString()).apply()
+    }
+
+    // ---- P1-3: declared plugin permission manifest ----
+
+    fun pluginPermissions(name: String): List<String> {
+        val raw = prefs.getString("$PLUGIN_PERM_PREFIX$name", null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { arr.optString(it) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun setPluginPermissions(name: String, perms: List<String>) {
+        prefs.edit().putString("$PLUGIN_PERM_PREFIX$name", JSONArray(perms).toString()).apply()
+    }
+
+    // ---- P0-1: auto memory distillation toggle ----
+
+    fun autoMemory(): Boolean = prefs.getBoolean(KEY_AUTO_MEMORY, true)
+    fun setAutoMemory(on: Boolean) = prefs.edit().putBoolean(KEY_AUTO_MEMORY, on).apply()
+
+    /** One audit-log row. */
+    data class ApprovalEntry(
+        val ts: Long,
+        val tool: String,
+        val granted: Boolean,
+        val source: String,
+    )
 
     private fun persistConfig(cfg: LlmConfig) {
         prefs.edit().putString(KEY_LLM, encodeConfig(cfg).toString()).apply()
@@ -216,5 +308,10 @@ class SettingsStore(context: Context) {
         private const val KEY_ONBOARDING = "onboarding_done_v1"
         private const val KEY_CURRENT_SESSION = "current_session_v1"
         private const val MEM_PREFIX = "mem_"
+        private const val KEY_APPROVED = "approved_tools_v1"
+        private const val KEY_APPROVAL_LOG = "approval_log_v1"
+        private const val KEY_AUTO_MEMORY = "auto_memory_v1"
+        private const val PLUGIN_PERM_PREFIX = "plugin_perm_"
+        private const val APPROVAL_LOG_MAX = 100
     }
 }
