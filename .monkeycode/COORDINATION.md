@@ -56,7 +56,7 @@
 - [x] H7 浏览器 `click/type` 索引防漂移 — **已修复**（PR #2, merge 43dc398）
 - [x] H8 崩溃存档静默丢失 — **已修复**（PR #6, merge c6e9297）
 - [x] H9 Android 16 卡顿/ANR — **已修复**（PR #21, merge 146f69c）
-- [@opencode] 260416-chore-h10-merge-note H10 端侧推理 tokens/s 本体 — **CPU dotprod + OpenCL 能力 + GPU 自动回退 + 应用内 tok/s 指标已合**（#35 37a54ae、#38 a1b7f9f、#41 cd3dd31；已发 v2.10、v2.11）；KV 复用（跨轮前缀续算）已合 v2.18（#54）；q8_0 KV 量化已合 v2.19（#57）/ v2.21 Vulkan；**Adreno decode 调优已合 v2.23+（PR #73：llama.cpp b11640 + xmem GEMM + 核心钉选 0-3，登记于 #75）**；**线程大核策略已增强为「按 /sys 自动识别大核簇」并通用化（v2.24，perf/big-core-affinity）**。剩余：真机核对 GPU 是否生效（OpenCL/Vulkan A/B）、批量 prefill 调优（长 prompt 的 n_ubatch 增大，待真机）
+- [@opencode] feat/v2.25-mnn-stream H10 端侧推理 tokens/s 本体 — **CPU dotprod + OpenCL 能力 + GPU 自动回退 + 应用内 tok/s 指标已合**（#35 37a54ae、#38 a1b7f9f、#41 cd3dd31；已发 v2.10、v2.11）；KV 复用（跨轮前缀续算）已合 v2.18（#54）；q8_0 KV 量化已合 v2.19（#57）/ v2.21 Vulkan；**Adreno decode 调优已合 v2.23+（PR #73：llama.cpp b11640 + xmem GEMM + 核心钉选 0-3，登记于 #75）**；**线程大核策略已增强为「按 /sys 自动识别大核簇」并通用化（v2.24，perf/big-core-affinity）**。进行中：MNN 逐步 onToken + OpenCL `thread_num=68`（v2.25 / versionCode 20，不改 llama.cpp 线程策略）。剩余：真机核对 GPU 是否生效（OpenCL/Vulkan A/B）、批量 prefill 调优（长 prompt 的 n_ubatch 增大，待真机）
 
 ### 中严重度
 - [x] M1 `nativeGenerate()` 死代码 — **已删除**（`chore/remove-native-generate`；Kotlin `generate()` 无调用者，连同 JNI export 一并移除）

@@ -53,15 +53,17 @@ class MnnLlmEngine : OnDeviceEngine {
                 )
                 return false
             }
-            val threads = if (nThreads > 0) nThreads else defaultThreads()
+            // OpenCL thread_num is a backend hint (68), not a pthread count.
+            // nThreads stays on the signature for ABI; native ignores it.
+            val openclThreads = CpuThreadPolicy.MNN_OPENCL_THREAD_NUM
             com.selfmod.agent.util.Diagnostics.log(
                 "mnn",
-                "load: ${modelDir.name} ctx=$nCtx nBatch=$nBatch threads=$threads",
+                "load: ${modelDir.name} ctx=$nCtx nBatch=$nBatch opencl_thread_num=$openclThreads (nThreads=$nThreads ignored)",
             )
             onProgress?.onProgress(0.1f)
             val t0 = System.currentTimeMillis()
             attempted = true
-            ok = nativeInit(modelDir.absolutePath, nCtx, threads, nBatch, onProgress)
+            ok = nativeInit(modelDir.absolutePath, nCtx, openclThreads, nBatch, onProgress)
             com.selfmod.agent.util.Diagnostics.log(
                 "mnn", "load 返回 $ok，耗时 ${System.currentTimeMillis() - t0}ms",
             )
@@ -165,11 +167,6 @@ class MnnLlmEngine : OnDeviceEngine {
     override fun chatTemplate(): String = if (loaded) nativeChatTemplate() else ""
     override fun lastChatStats(): String =
         if (loaded) runCatching { nativeLastChatStats() }.getOrDefault("") else ""
-
-    private fun defaultThreads(): Int {
-        val cores = Runtime.getRuntime().availableProcessors()
-        return cores.coerceIn(2, 8)
-    }
 
     private external fun nativeInit(
         modelDir: String, nCtx: Int, nThreads: Int, nBatch: Int,
