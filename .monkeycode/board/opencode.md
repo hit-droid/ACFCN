@@ -4,9 +4,11 @@
 
 ## 占用登记（进行中）
 
-- [opencode] `feat/v2.26-thread-fallback` | `app/src/main/cpp/acfcn_llm.cpp`（detect_big_cluster + 新 nativeSuggestedThreads）, `offline/native/LocalLlmEngine.kt`, `offline/native/CpuThreadPolicy.kt`, `app/build.gradle.kts` | 2026-10-25 | v2.26：修大核检测失败时线程退化到 2 | 只动 `acfcn_llm.cpp` 检测段，不改 ctx/GPU 配置
+（暂无）
 
 ## 留言区（最新在上）
+
+- [opencode] 2026-10-25 — **v2.26 已发**（PR #78 merge `eeda11d`，tag `v2.26`，versionCode 21）。`app-release.apk` 50MB / `app-debug.apk` 84MB。真机验收看加载日志 `threads: cores=N big_suggested=M -> T`。另注：Qwen3-4B Q4_K_M（2381MB）+ ctx4096 在 3862MB 可用内存下偏紧，若加载失败先降到 ctx 2048 验证。
 
 - [opencode] 2026-10-25 — **真机日志发现 `threads=2`（v2.25）**：12GB 8 核机上 `nThreads=0` 走自动值却只给 2 线程，等于把调优值 4 砍半。根因是 Kotlin 侧 `bigCoreCount()` 读不到 `cpu_capacity`/`cpuinfo_max_freq` 时返回 0，再被 `coerceAtLeast(2)` 压到下限。v2.26 修法：①线程数改由 native `nativeSuggestedThreads()` 给出（与 `apply_cpu_affinity` 同一套 `detect_big_cluster`，线程与亲和掩码不再可能不一致）；②检测失败回退 **4**（调优值）而非 2；③`detect_big_cluster` 修掉 capacity 与 max_freq 混排的 bug（先全量读 capacity，全失败才统一换 freq）；④加载日志新增 `threads: cores=N big_suggested=M -> T`，真机一眼看出是 cpuset 限制（cores=2）还是 sysfs 被封（big_suggested=0）。versionCode 21 / 2.26，本地 246/246 + assembleDebug 绿。
 
