@@ -84,6 +84,7 @@ static void llama_log_to_logcat(enum ggml_log_level level, const char *text, voi
 //   adb shell setprop debug.acfcn.threads 8     # override thread count
 //   adb shell setprop debug.acfcn.cpu_affinity 0-3  # pin engine to big cores ("none" = off)
 //   adb shell setprop debug.acfcn.opencl_xmem 0    # disable Adreno xmem GEMM (default on)
+//   adb shell setprop debug.acfcn.warmup 0         # skip GPU kernel warmup at load (default on)
 // Property changes take effect on the next model load.
 static int get_property_int(const char *name, int fallback) {
     char value[PROP_VALUE_MAX] = {0};
@@ -858,6 +859,66 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     llama_set_abort_callback(g_engine.ctx, abort_trampoline, &g_engine);
     g_engine.n_ctx.store(nCtx);
     g_engine.n_batch = batch;
+
+    // --- Kernel warmup (moves first-chat latency into model load) -----------
+    // The first llama_decode() on a GPU backend compiles every kernel it
+    // touches — Adreno drivers keep no shader cache across processes — so
+    // that cost used to be billed to the user's first message (seconds of
+    // "stuck" first token after a perfectly fast load). Decode one token
+    // here (the exact shape every generated token costs) plus a small
+    // prefill-shaped batch, then wipe the KV cache: the work happens while
+    // the load progress bar is still on screen. Non-fatal by design — a
+    // warmup failure only falls back to paying it at first chat.
+    //   debug.acfcn.warmup = 0   # disable (default: on)
+    std::string warmup_report;
+    {
+        char value[PROP_VALUE_MAX] = {0};
+        bool warmup = true;
+        int len = __system_property_get("debug.acfcn.warmup", value);
+        if (len > 0) {
+            std::string v(value);
+            warmup = !(v == "0" || v == "off" || v == "false");
+        }
+        if (!warmup) {
+            LOGI("kernel warmup disabled via debug.acfcn.warmup");
+            warmup_report = "kernel warmup: disabled";
+        } else if (g_engine.abort_flag.load()) {
+            // Load itself was cancelled; do not start new GPU work.
+            warmup_report = "kernel warmup: skipped (load aborted)";
+        } else {
+            llama_memory_t wmem = llama_get_memory(g_engine.ctx);
+            llama_token warm = llama_vocab_bos(g_engine.vocab);
+            const int wpf = std::min((int) g_engine.n_batch, 64);
+            int wrc = -1;
+            if (warm >= 0) {
+                // 1) decode shape: one token, what every generated token costs
+                llama_batch wb = llama_batch_get_one(&warm, 1);
+                wrc = llama_decode(g_engine.ctx, wb);
+                // 2) prefill shape: a small ubatch (shape-generic kernels cover
+                //    the larger real prefills from here)
+                if (wrc == 0) {
+                    std::vector<llama_token> pad(wpf > 1 ? wpf : 1, warm);
+                    llama_batch pb = llama_batch_get_one(pad.data(), (int) pad.size());
+                    wrc = llama_decode(g_engine.ctx, pb);
+                }
+            }
+            llama_memory_clear(wmem, true);   // warmup must not pollute the KV
+            if (warm < 0) {
+                LOGI("kernel warmup skipped: no BOS token");
+                warmup_report = "kernel warmup: skipped (no BOS)";
+            } else if (wrc == 0) {
+                LOGI("kernel warmup done (decode + %d-token prefill shape), kv cleared", wpf);
+                warmup_report = "kernel warmup: ok (decode + " + std::to_string(wpf) + "-token prefill)";
+            } else {
+                LOGI("kernel warmup decode failed rc=%d (non-fatal; first chat pays it)", wrc);
+                warmup_report = "kernel warmup: failed rc=" + std::to_string(wrc);
+            }
+            // A cancel pressed during the warmup window was aimed at the load
+            // UI, which has already finished; leaving abort_flag set would
+            // instantly cancel the next chat instead.
+            g_engine.abort_flag.store(false);
+        }
+    }
     const auto t_ctx = std::chrono::steady_clock::now();
 
     // Build the load summary surfaced to Kotlin for the in-app diagnostics:
@@ -883,6 +944,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 #endif
         info += "\n" + g_gpu_log;
         if (!g_big_core_report.empty()) info += "\n" + g_big_core_report;
+        if (!warmup_report.empty()) info += "\n" + warmup_report;
         auto ms = [](std::chrono::steady_clock::time_point a,
                      std::chrono::steady_clock::time_point b) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();

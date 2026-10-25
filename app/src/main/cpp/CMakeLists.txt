@@ -76,34 +76,41 @@ if(ACFCN_ENABLE_VULKAN)
     set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE NEVER)
 endif()
 
-# b11640 = commit 3e390af18de1131dda27913c00511725b4274c8a (2026-10-15),
-# over the previous b11179 (2026-09-25) for:
-#   * #30215 vulkan: L2-friendly workgroup scheduling for the cm2 mulmat —
-#     the decode-time matmul on the target device's Adreno 740
-#   * #29639 quantized-KV (q4_0/q8_0) flash attention support on Vulkan,
-#     which our default q8_0 KV + FA path depends on
-#   * Adreno OpenCL fixes (#30176 compile fix, #30041 xmem OOB) and several
-#     Vulkan FA correctness fixes (#29591 / #29988 / #30003)
+# Pinned to master @ 74bca3950054eed1795f525cb9cf06bfe796492d (2026-10-25),
+# 230 commits ahead of the previous b11640 (2026-10-15). Highlights for the
+# Adreno decode/prefill path (the "match MNN speed" line):
+#   * opencl: cooperative-k dp4a GEMM for q4_0 / q4_K / q6_K (#30741) plus
+#     dp4a vector-load-activation variants (#30753) and small-batch GEMM
+#     variants (#30850) — the decode/prefill matmul work on Adreno 740
+#   * opencl: fix OOB tail access for the Adreno noshuffle GEMV kernels
+#     (#30421, the decode GEMV path) and apply FA softcap before the mask
+#     (#30546); rope program build fix for newer Clang (#30893), which the
+#     NDK r27+ Clang in CI needs
+#   * vulkan: ggml src1 precision support (#30656) and concurrent first
+#     device init fix (#29766)
 # API compatibility for every llama_/ggml_ symbol acfcn_llm.cpp uses was
-# verified symbol-by-symbol against this tag's llama.h / ggml.h /
-# ggml-backend.h; the llama_batch API churn (#29622) does not touch
-# llama_batch_get_one, our only usage.
+# verified symbol-by-symbol against this commit's llama.h / ggml.h /
+# ggml-backend.h; the only visible changes are llama_sampler_chain_add
+# returning void instead of bool (we ignore the return value) and
+# llama_model_params.use_mlock being removed (we do not use it).
+# llama_batch_get_one is unchanged. llama.cpp switched to semver tags
+# (v0.7.0 = 2026-10-15); b11640 was the last b-tag, so this pins the SHA.
 FetchContent_Declare(
     llama
     GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
-    GIT_TAG        b11640
+    GIT_TAG        74bca3950054eed1795f525cb9cf06bfe796492d
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(llama)
 
-# ggml-vulkan (llama.cpp >= ~b11640) calls std::aligned_alloc(), which
-# bionic only exports from API 28 — with minSdk 26 the build dies with
-# "reference to unresolved using declaration". Force-include a shim that
-# declares ::aligned_alloc for API < 28; the implementation is in
-# vulkan_compat.cpp (same pattern as the vkGetPhysicalDeviceFeatures2
-# shim below). Applied surgically to ggml-vulkan only — it is the sole
-# user of aligned_alloc in the backends we build (ggml-rpc / ggml-sycl
-# are not enabled).
+# ggml-vulkan called std::aligned_alloc() up to b11640, which bionic only
+# exports from API 28 — with minSdk 26 the build died with "reference to
+# unresolved using declaration". Upstream replaced it with posix_memalign
+# (#30828), so this shim is now a harmless no-op safety net: nothing in the
+# backends we build references ::aligned_alloc any more, but keeping the
+# force-include costs nothing and protects against a regression. The
+# implementation is in vulkan_compat.cpp (same pattern as the
+# vkGetPhysicalDeviceFeatures2 shim below).
 if(TARGET ggml-vulkan)
     target_compile_options(ggml-vulkan PRIVATE
         "-include${CMAKE_CURRENT_SOURCE_DIR}/android_aligned_alloc_compat.h")

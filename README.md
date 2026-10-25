@@ -61,6 +61,15 @@ adb shell setprop debug.acfcn.cpu_affinity none
 
 离线页「诊断日志」加载后会多一行 `cpu_affinity: ...`，显示是自动识别到的大核簇、手动指定的掩码，还是因设备无拓扑信息跳过了钉选。
 
+### 端侧加速（GPU 内核预热）
+
+Adreno 驱动没有跨进程的 shader 缓存，第一次 `llama_decode` 会把用到的每个内核现场编译一遍——这部分时间原来记在用户发出第一条消息之后（模型加载很快、首 token 很慢）。现在加载模型时会顺手做一次预热：先解码 1 个 token（正是每个生成 token 的计算图形状），再跑一小批 prefill 形状，然后清空 KV 缓存。开销记在加载进度条上，首次对话不再付编译费。预热失败不影响加载（仅退回旧行为）。
+
+```bash
+# 关闭预热（默认开）
+adb shell setprop debug.acfcn.warmup 0
+```
+
 App 离线页「诊断日志」在加载后会显示：本构建是否支持 GPU offload、请求的 GPU 层数、CPU 指令集（确认 dotprod 已启用）、以及 llama.cpp 打印的 OpenCL 设备与实际放置到 GPU 的层数；生成后还会显示首 token、总耗时与解码 tok/s。以上均无需 adb。详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：
 
 ```bash
