@@ -8,6 +8,8 @@
 
 ## 留言区（最新在上）
 
+- [opencode] 2026-10-25 — **v2.27 已发**（PR #81 merge `6998ca0`，tag `v2.27`，versionCode 22）。真机日志 `threads: cores=8 big_suggested=1 -> 2`：v2.26 的 `detect_big_cluster` 只认 `score == max` 的核，SD 8 Gen 1 上只有 X2 达到最高 `cpu_capacity`，3 个 A710（约 900/1024）全部落选，2 个解码线程被钉在 1 个核上。本版改为**按性能簇取核**：先取最高档；当最高档只有 1 个核、且次高档仍在峰值 75% 以上时，把次高档一并纳入。SD 8 Gen 1 → X2+A710 共 4 核（threads=4），8 Elite → 2 核，Tensor G3 → 3 核。`cpu threads` 日志加打印实际核列表（`big=4 [0,1,2,3]`），下次真机日志可直接确认。**ANR/卡顿排查结论**：主线程无代码级阻塞——加载/卸载/自检/会话持久化全在 `Dispatchers.IO`，流式更新经 `DeltaPacer` 100ms 节流，`LazyColumn` 按 `id` 复用且 `MarkdownText` 用 `remember(md)` 缓存解析，`LaunchedEffect(trace.size)` 只在条数变化时滚动。剩余风险两处：①`App.onCreate` 在主线程 dlopen `libacfcn_llm.so` + `libacfcn_mnn.so` 并做插件 SHA-256，冷启动可能拖到 ANR；②可用内存 3.3GB 下加载 2GB 模型 + KV 的系统级内存压力。若要继续压 ANR，优先把 `initEngine()` 的 dlopen 移出主线程。
+
 - [opencode] 2026-10-25 — **v2.26 已发**（PR #78 merge `eeda11d`，tag `v2.26`，versionCode 21）。`app-release.apk` 50MB / `app-debug.apk` 84MB。真机验收看加载日志 `threads: cores=N big_suggested=M -> T`。另注：Qwen3-4B Q4_K_M（2381MB）+ ctx4096 在 3862MB 可用内存下偏紧，若加载失败先降到 ctx 2048 验证。
 
 - [opencode] 2026-10-25 — **真机日志发现 `threads=2`（v2.25）**：12GB 8 核机上 `nThreads=0` 走自动值却只给 2 线程，等于把调优值 4 砍半。根因是 Kotlin 侧 `bigCoreCount()` 读不到 `cpu_capacity`/`cpuinfo_max_freq` 时返回 0，再被 `coerceAtLeast(2)` 压到下限。v2.26 修法：①线程数改由 native `nativeSuggestedThreads()` 给出（与 `apply_cpu_affinity` 同一套 `detect_big_cluster`，线程与亲和掩码不再可能不一致）；②检测失败回退 **4**（调优值）而非 2；③`detect_big_cluster` 修掉 capacity 与 max_freq 混排的 bug（先全量读 capacity，全失败才统一换 freq）；④加载日志新增 `threads: cores=N big_suggested=M -> T`，真机一眼看出是 cpuset 限制（cores=2）还是 sysfs 被封（big_suggested=0）。versionCode 21 / 2.26，本地 246/246 + assembleDebug 绿。
