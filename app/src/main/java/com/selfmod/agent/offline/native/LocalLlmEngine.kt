@@ -72,6 +72,10 @@ class LocalLlmEngine : OnDeviceEngine {
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
                     .forEach { com.selfmod.agent.util.Diagnostics.log("gpu", it) }
+                runCatching { nativeBigCoreInfo() }
+                    .getOrDefault("")
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { com.selfmod.agent.util.Diagnostics.log("perf", it) }
             }
             return ok
         } finally {
@@ -196,16 +200,57 @@ class LocalLlmEngine : OnDeviceEngine {
      * Decode thread count. The target device (Snapdragon 8+ Gen 1) is 1x X2 +
      * 3x A710 (Linux CPU 0-3) + 4x A510 (CPU 4-7). Binding the llama
      * threadpools to the big cluster only (apply_cpu_affinity in
-     * acfcn_llm.cpp) with 4 threads measured faster than 6 threads across
-     * both clusters on this SoC class (paragon83114/llama-adreno: 4t on
-     * cores 0-3 = 31.4±0.0 vs 6t = 30.5±1.5 tok/s, tg128), so the default
-     * is capped at 4. Override at runtime:
-     * adb shell setprop debug.acfcn.threads N
+     * acfcn_llm.cpp, which auto-detects the big cluster from sysfs) with 4
+     * threads measured faster than 6 threads across both clusters on this SoC
+     * class (paragon83114/llama-adreno: 4t on cores 0-3 = 31.4±0.0 vs 6t =
+     * 30.5±1.5 tok/s, tg128), so the default is kept at or below 4. The big
+     * cluster size is detected from sysfs so the count tracks the actual
+     * hardware (e.g. 2 big cores -> 2 threads) instead of a fixed cap.
+     * Override at runtime: adb shell setprop debug.acfcn.threads N
      */
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
-        return cores.coerceIn(2, 4)
+        // Cap at the detected big-core count (min 2), then clamp to [2,4] so we
+        // never oversubscribe beyond what the big cluster can usefully hold.
+        val big = bigCoreCount().coerceAtLeast(2)
+        return minOf(cores, big).coerceIn(2, 4)
     }
+
+    // Count the "big" (highest-capacity) CPU cluster via sysfs. Returns 0 when
+    // detection is unavailable so callers fall back to their default.
+    private fun bigCoreCount(): Int = runCatching {
+        val online = java.io.File("/sys/devices/system/cpu/online").readText().trim()
+        val ids = parseOnlineCpus(online)
+        if (ids.isEmpty()) return@runCatching 0
+        val cap = ids.associateWith { cpu ->
+            readSysfsInt("/sys/devices/system/cpu/cpu$cpu/cpu_capacity")
+                .takeIf { it > 0 }
+                ?: readSysfsInt("/sys/devices/system/cpu/cpu$cpu/cpufreq/cpuinfo_max_freq")
+        }
+        val max = cap.values.maxOrNull() ?: 0
+        if (max <= 0) 0 else cap.count { it.value >= max }
+    }.getOrDefault(0)
+
+    private fun parseOnlineCpus(spec: String): List<Int> {
+        val out = mutableListOf<Int>()
+        for (part in spec.split(',')) {
+            val p = part.trim()
+            if (p.isEmpty()) continue
+            val rng = p.split('-')
+            if (rng.size == 2) {
+                val lo = rng[0].toIntOrNull() ?: continue
+                val hi = rng[1].toIntOrNull() ?: continue
+                for (c in lo..hi) out += c
+            } else {
+                p.toIntOrNull()?.let { out += it }
+            }
+        }
+        return out
+    }
+
+    private fun readSysfsInt(path: String): Int = runCatching {
+        java.io.File(path).readText().trim().toIntOrNull() ?: -1
+    }.getOrDefault(-1)
 
     private external fun nativeInit(
         modelPath: String,
@@ -231,6 +276,7 @@ class LocalLlmEngine : OnDeviceEngine {
     private external fun nativeLastGpuLayers(): Int
     private external fun nativeLoadInfo(): String
     private external fun nativeLastChatStats(): String
+    private external fun nativeBigCoreInfo(): String
 
     companion object {
         @Volatile

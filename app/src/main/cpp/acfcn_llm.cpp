@@ -48,6 +48,10 @@ static int llama_log_level_to_android(enum ggml_log_level level) {
 static std::mutex g_gpu_log_mu;
 static std::string g_gpu_log;
 static std::string g_load_info;
+// perf: human-readable report of the CPU-affinity decision made at model load
+// (which cores were pinned, or why affinity was skipped), surfaced via
+// nativeBigCoreInfo() and folded into the in-app diagnostics.
+static std::string g_big_core_report;
 
 static void llama_log_to_logcat(enum ggml_log_level level, const char *text, void * /*user_data*/) {
     if (text == nullptr) return;
@@ -343,7 +347,7 @@ void install_signal_handlers() {
 //
 // The target device (Honor 90 GT, Snapdragon 8+ Gen 1) is 1x Cortex-X2 +
 // 3x Cortex-A710 (Linux CPU 0-3, the big cluster) + 4x Cortex-A510 (CPU 4-7).
-// Cross-cluster decode with 6 threads spreads work over the little cores,
+// Cross-cluster decode with all cores spreads work over the little cores,
 // dragging per-token latency to the slowest cluster's memory pipeline and
 // adding scheduler noise. Community measurement on this same SoC class
 // (paragon83114/llama-adreno) showed 4 threads bound to cores 0-3 beating 6
@@ -355,56 +359,145 @@ void install_signal_handlers() {
 // *this* thread once therefore covers both pools for the whole context
 // lifetime; the caller thread itself only orchestrates decode.
 //
-//   debug.acfcn.cpu_affinity = 0-3   (default; comma-separated ranges: 0-3,7)
+// Default (no property set): auto-detect the big cluster from sysfs and pin to
+// it, so the optimization works on *any* big.LITTLE device, not just the one
+// the hardcoded 0-3 mask was tuned for. Manual override still wins:
+//   debug.acfcn.cpu_affinity = 0-3   (comma-separated ranges: 0-3,7)
+//   debug.acfcn.cpu_affinity = auto  (force the sysfs auto-detection path)
 //   debug.acfcn.cpu_affinity = none  (disable: kernel default placement)
 // The requested mask is intersected with this process's actually-allowed
 // set (cpuset / cgroup restrictions, e.g. background app limits), so a
 // restricted device degrades to fewer cores instead of failing to start.
+
+// Read a single integer from a sysfs file; returns -1 on any failure.
+static int read_cpu_int(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    int v = -1;
+    if (fscanf(f, "%d", &v) != 1) v = -1;
+    fclose(f);
+    return v;
+}
+
+// Parse /sys/devices/system/cpu/online (e.g. "0-3,5,7-8") into a core list.
+static bool parse_online_cpus(std::vector<int> &cpus) {
+    FILE *f = fopen("/sys/devices/system/cpu/online", "r");
+    if (!f) return false;
+    char buf[160];
+    if (!fgets(buf, sizeof(buf), f)) { fclose(f); return false; }
+    fclose(f);
+    const char *p = buf;
+    while (*p) {
+        while (*p == ' ' || *p == '\n' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        int lo = 0, hi = 0;
+        if (sscanf(p, "%d-%d", &lo, &hi) == 2) {
+            for (int c = lo; c <= hi && c < 1024; ++c) cpus.push_back(c);
+            while (*p && *p != ',') p++;
+        } else if (sscanf(p, "%d", &lo) == 1) {
+            if (lo < 1024) cpus.push_back(lo);
+            while (*p && *p != ',') p++;
+        } else {
+            p++;
+        }
+    }
+    return !cpus.empty();
+}
+
+// Rank online cores by compute capacity and fill `out` with the big cluster
+// (the highest-capacity cores). Uses EAS cpu_capacity when present, else
+// cpuinfo_max_freq, else treats all cores as equal (uses all). Returns true if
+// `out` was populated. This is what makes the pinning device-agnostic.
+static bool detect_big_cluster(cpu_set_t *out) {
+    CPU_ZERO(out);
+    std::vector<int> cpus;
+    if (!parse_online_cpus(cpus) || cpus.empty()) return false;
+    struct Core { int id; int score; };
+    std::vector<Core> cores;
+    bool have_capacity = false;
+    for (int c : cpus) {
+        char pb[160];
+        snprintf(pb, sizeof(pb), "/sys/devices/system/cpu/cpu%d/cpu_capacity", c);
+        int s = read_cpu_int(pb);
+        if (s > 0) have_capacity = true;
+        if (!have_capacity || s <= 0) {
+            snprintf(pb, sizeof(pb),
+                     "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c);
+            s = read_cpu_int(pb);
+        }
+        if (s < 0) s = 0;
+        cores.push_back({c, s});
+    }
+    int maxs = 0;
+    for (const auto &c : cores) maxs = std::max(maxs, c.score);
+    bool added = false;
+    for (const auto &c : cores) {
+        if (maxs > 0 ? c.score >= maxs : true) { CPU_SET(c.id, out); added = true; }
+    }
+    return added;
+}
+
 void apply_cpu_affinity() {
     char value[PROP_VALUE_MAX] = {0};
     __system_property_get("debug.acfcn.cpu_affinity", value);
-    const std::string spec(value[0] ? value : "0-3");
-    if (spec == "none" || spec == "off" || spec == "false") {
-        LOGI("cpu affinity: disabled by property (kernel default placement)");
-        return;
-    }
-
-    auto is_num = [](const std::string &s) {
-        if (s.empty()) return false;
-        for (char c : s) if (c < '0' || c > '9') return false;
-        return true;
-    };
+    const std::string prop(value[0] ? value : "");
 
     cpu_set_t want;
     CPU_ZERO(&want);
-    int added = 0;
-    size_t i = 0;
-    while (i < spec.size()) {
-        size_t comma = spec.find(',', i);
-        if (comma == std::string::npos) comma = spec.size();
-        const std::string item = spec.substr(i, comma - i);
-        i = comma + 1;
-        const size_t dash = item.find('-');
-        long lo = 0, hi = -1;
-        if (dash == std::string::npos) {
-            if (is_num(item)) { lo = hi = strtol(item.c_str(), nullptr, 10); }
+
+    if (prop.empty() || prop == "auto") {
+        // Device-agnostic default: pin to the big cluster detected from sysfs.
+        // Falls back to kernel default placement when detection is unavailable
+        // (e.g. a device exposing neither cpu_capacity nor cpuinfo_max_freq).
+        if (detect_big_cluster(&want)) {
+            g_big_core_report = "cpu_affinity: auto-detected big cluster";
         } else {
-            const std::string a = item.substr(0, dash);
-            const std::string b = item.substr(dash + 1);
-            if (is_num(a) && is_num(b)) {
-                lo = strtol(a.c_str(), nullptr, 10);
-                hi = strtol(b.c_str(), nullptr, 10);
-                if (lo > hi) std::swap(lo, hi);
+            LOGI("cpu affinity: auto-detect failed; kernel default placement");
+            g_big_core_report = "cpu_affinity: auto-detect failed, default placement";
+            return;
+        }
+    } else if (prop == "none" || prop == "off" || prop == "false") {
+        LOGI("cpu affinity: disabled by property (kernel default placement)");
+        g_big_core_report = "cpu_affinity: disabled (debug.acfcn.cpu_affinity=" + prop + ")";
+        return;
+    } else {
+        auto is_num = [](const std::string &s) {
+            if (s.empty()) return false;
+            for (char c : s) if (c < '0' || c > '9') return false;
+            return true;
+        };
+        int added = 0;
+        size_t i = 0;
+        while (i < prop.size()) {
+            size_t comma = prop.find(',', i);
+            if (comma == std::string::npos) comma = prop.size();
+            const std::string item = prop.substr(i, comma - i);
+            i = comma + 1;
+            const size_t dash = item.find('-');
+            long lo = 0, hi = -1;
+            if (dash == std::string::npos) {
+                if (is_num(item)) { lo = hi = strtol(item.c_str(), nullptr, 10); }
+            } else {
+                const std::string a = item.substr(0, dash);
+                const std::string b = item.substr(dash + 1);
+                if (is_num(a) && is_num(b)) {
+                    lo = strtol(a.c_str(), nullptr, 10);
+                    hi = strtol(b.c_str(), nullptr, 10);
+                    if (lo > hi) std::swap(lo, hi);
+                }
+            }
+            for (long v = lo; v <= hi && v >= 0 && v < CPU_SETSIZE; ++v) {
+                CPU_SET((int) v, &want);
+                ++added;
             }
         }
-        for (long v = lo; v <= hi && v >= 0 && v < CPU_SETSIZE; ++v) {
-            CPU_SET((int) v, &want);
-            ++added;
+        if (added == 0) {
+            LOGI("cpu affinity: unparseable spec \"%s\"; leaving default placement",
+                 prop.c_str());
+            g_big_core_report = "cpu_affinity: unparseable spec, default placement";
+            return;
         }
-    }
-    if (added == 0) {
-        LOGI("cpu affinity: unparseable spec \"%s\"; leaving default placement", spec.c_str());
-        return;
+        g_big_core_report = "cpu_affinity: manual spec " + prop;
     }
 
     // Intersect with what this process is actually allowed to run on.
@@ -413,6 +506,7 @@ void apply_cpu_affinity() {
     if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
         LOGI("cpu affinity: sched_getaffinity failed (%s); leaving default placement",
              strerror(errno));
+        g_big_core_report = "cpu_affinity: sched_getaffinity failed, default placement";
         return;
     }
     for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
@@ -429,15 +523,18 @@ void apply_cpu_affinity() {
     }
     if (n == 0) {
         LOGI("cpu affinity: requested mask disjoint from the allowed set; leaving default placement");
+        g_big_core_report = "cpu_affinity: mask disjoint from allowed set, default placement";
         return;
     }
     if (sched_setaffinity(0, sizeof(want), &want) != 0) {
         LOGI("cpu affinity: sched_setaffinity({%s}) failed (%s); leaving default placement",
              mask.c_str(), strerror(errno));
+        g_big_core_report = "cpu_affinity: sched_setaffinity failed, default placement";
         return;
     }
     LOGI("cpu affinity: engine thread pinned to cpu {%s} (llama threadpools inherit;"
          " override: debug.acfcn.cpu_affinity)", mask.c_str());
+    g_big_core_report += " -> pinned cpu {" + mask + "}";
 }
 
 } // namespace
@@ -756,6 +853,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         info += " icd_filenames=" + std::string(icd_f ? icd_f : "-");
 #endif
         info += "\n" + g_gpu_log;
+        if (!g_big_core_report.empty()) info += "\n" + g_big_core_report;
         g_load_info = info;
     }
 
@@ -1172,4 +1270,14 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeLastChatStats(
         JNIEnv *env, jobject /*thiz*/) {
     std::lock_guard<std::mutex> lk(g_engine.mu);
     return env->NewStringUTF(g_engine.last_stats.c_str());
+}
+
+// Human-readable summary of the big-core affinity decision at the last model
+// load (which cores were pinned, or why affinity was skipped) so the in-app
+// diagnostics can confirm the perf optimization took effect without adb.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeBigCoreInfo(
+        JNIEnv *env, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> lk(g_gpu_log_mu);
+    return env->NewStringUTF(g_big_core_report.c_str());
 }
