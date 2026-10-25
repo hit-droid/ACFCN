@@ -38,6 +38,29 @@ adb shell setprop debug.acfcn.gpu_layers 99
 adb shell setprop debug.acfcn.threads 8
 ```
 
+### 端侧加速（大核线程策略）
+
+多数 Android 手机是 big.LITTLE 架构：几个高频「大核」+ 一堆低频「小核」。llama.cpp 的 worker 线程池默认会铺满所有核，而解码是计算密集的，慢的小核会拖累每一个 token。ACFCN 在加载模型时把计算线程池**钉在最快的大核上**：
+
+- 默认（不设 `debug.acfcn.cpu_affinity`）按 `/sys` 的 `cpu_capacity` / `cpuinfo_max_freq` **自动识别大核簇**并钉选——所以对任何 big.LITTLE 机型都生效，而不只是某一台被调过的机器；
+- 模型加载（`nativeInit`）时通过 `sched_setaffinity` 钉当前线程，Linux/Android 新线程继承创建者亲和性，于是 ggml 线程池在 `llama_init_from_model` 里生成时就自动落到大核，整个上下文生命周期内持续生效（无需侵入 ggml）；
+- Kotlin 侧默认线程数也按识别到的大核数收敛（上限 4，见 `defaultThreads()`），避免大核数少于 4 时把线程铺到小核。
+
+运行时开关（下次加载模型生效）：
+
+```bash
+# 强制自动识别大核（显式，等价于不设）
+adb shell setprop debug.acfcn.cpu_affinity auto
+
+# 手动指定核心（逗号分隔范围，覆盖自动识别；骁龙 8+ Gen1 即 0-3）
+adb shell setprop debug.acfcn.cpu_affinity 0-3
+
+# 关闭钉选，退回内核默认调度
+adb shell setprop debug.acfcn.cpu_affinity none
+```
+
+离线页「诊断日志」加载后会多一行 `cpu_affinity: ...`，显示是自动识别到的大核簇、手动指定的掩码，还是因设备无拓扑信息跳过了钉选。
+
 App 离线页「诊断日志」在加载后会显示：本构建是否支持 GPU offload、请求的 GPU 层数、CPU 指令集（确认 dotprod 已启用）、以及 llama.cpp 打印的 OpenCL 设备与实际放置到 GPU 的层数；生成后还会显示首 token、总耗时与解码 tok/s。以上均无需 adb。详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：
 
 ```bash
