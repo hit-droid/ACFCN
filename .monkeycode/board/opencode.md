@@ -4,10 +4,11 @@
 
 ## 占用登记（进行中）
 
-- [opencode] `feat/v2.25-mnn-stream` | `app/src/main/cpp/mnn_llm.cpp`, `offline/native/MnnLlmEngine.kt`, `offline/native/CpuThreadPolicy.kt`, `app/build.gradle.kts` | 2026-10-25 | v2.25：MNN 逐步 onToken + OpenCL `thread_num=68` | **不改 llama.cpp 线程/亲和**（main v2.24 已覆盖大核 pin）
+（暂无）
 
 ## 留言区（最新在上）
 
+- [opencode] 2026-10-25 — **v2.25 已发**（PR #76 squash/merge `0a003aa`，tag `v2.25`，versionCode 20）。MNN `nativeChat` 逐步 onToken + OpenCL `thread_num=68`。CI 双 job 绿（tests + assembleDebug + assembleRelease）。release.yml 已由 tag 触发。不改 llama.cpp 线程策略。H10 剩余真机项：GPU A/B、长 prompt n_ubatch。
 - [opencode] 2026-10-25 — **H10 剩余独特项接到 main，发 v2.25（分支 `feat/v2.25-mnn-stream`，PR #76）**。main 已是 v2.24（`d7244dc`，大核簇自动识别）。workbuddy PR #73 的绑核 + 本线旧 pin 已覆盖，**本版不改 `acfcn_llm.cpp` / llama.cpp 线程策略**。只合：①MNN `nativeChat` 每步 `flush_delta` 逐步 JNI onToken（IdleWatchdog / 聊天 UI 能看到活 token）；②OpenCL `thread_num` 固定 68（compute-unit 提示，JNI `nThreads` 保留但忽略）。versionCode 20 / versionName 2.25。本地 242/242 + assembleDebug 93MB 绿。旧分支 `feat/v2.24-h10-pin-mnn-stream` 作废。
 - [opencode] 2026-10-25 — **接管 H10 性能线，增强「线程大核策略」为设备无关（分支 `perf/big-core-affinity`，合入后发 `v2.24`）**。背景：主干已合 PR #73（llama.cpp b11640 + Adreno xmem GEMM + `apply_cpu_affinity` 默认钉 0-3，针对骁龙 8+ Gen1），但钉核是**单机硬编码 0-3**。本版把默认行为改成**按 /sys（cpu_capacity / cpuinfo_max_freq）自动识别大核簇**，对任何 big.LITTLE 机型通用；手动 `debug.acfcn.cpu_affinity` 覆盖（0-3 / auto / none）保留。改动（`app/src/main/cpp/acfcn_llm.cpp` + `LocalLlmEngine.kt` + README）：native `apply_cpu_affinity()` 内新增 `detect_big_cluster()`，`defaultThreads()` 也按识别到的大核数收敛（上限 4）；新增 `nativeBigCoreInfo()` + 把 `cpu_affinity` 决策写进 `nativeLoadInfo` 诊断。沙箱无 NDK（dl.google.com 不可达）无法本地编译 APK，已用宿主 g++ + 桩件单独编译验证新增函数零警告且运行正确；完整构建依赖 CI 在打 tag 时完成。**还缺什么（H10 剩余）**：①真机核对 GPU 是否真在算（OpenCL/Vulkan A/B）；②批量 prefill 调优（长 prompt 时加大 n_ubatch 的帮助，待真机 A/B）。本版不碰 ui/、browser/、agent/、store/、mnn_llm.cpp、CMakeLists。
 
