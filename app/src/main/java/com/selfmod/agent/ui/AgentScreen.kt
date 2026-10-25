@@ -188,6 +188,23 @@ fun AgentScreen(vm: AgentViewModel) {
                     Spacer(Modifier.height(8.dp))
                     Text(req.name, color = Danger, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                     Spacer(Modifier.height(8.dp))
+                    if (req.permissions.isNotEmpty()) {
+                        Text(
+                            "该插件声明的权限：",
+                            color = TextSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        req.permissions.forEach { p ->
+                            Text(
+                                "· $p",
+                                color = AccentAmber,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Text(
                         req.args.take(600),
                         color = TextSecondary,

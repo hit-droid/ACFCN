@@ -1,12 +1,17 @@
 package com.selfmod.agent.offline
 
 import android.content.Context
+import com.selfmod.agent.agent.HttpGuard
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
 import java.util.UUID
 
 data class LocalModel(
@@ -38,6 +43,7 @@ data class LocalModel(
  */
 class LocalModelStore(private val context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val cr = context.applicationContext.contentResolver
     private val modelsDir = File(context.filesDir, "models").apply { mkdirs() }
 
     fun list(): List<LocalModel> {
@@ -64,7 +70,6 @@ class LocalModelStore(private val context: Context) {
     }
 
     fun importUri(uri: Uri): LocalModel {
-        val cr = context.contentResolver
         runCatching {
             cr.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
@@ -78,11 +83,106 @@ class LocalModelStore(private val context: Context) {
                 if (sizeIdx >= 0) size = c.getLong(sizeIdx)
             }
         }
+        return registerModel(uri, display, size)
+    }
+
+    /**
+     * Registers a model file that already sits on disk (P2-7). Unlike [importUri]
+     * it takes a real [File] and stores a `file://` URI, so the file stays where it
+     * is and [materialize] can read it directly without copying.
+     */
+    fun importFile(file: File): LocalModel {
+        val uri = Uri.fromFile(file)
+        return registerModel(uri, file.name, file.length())
+    }
+
+    /**
+     * Streams a model file from a URL into app storage, sniffs its format + metadata,
+     * and registers it like [importUri]. Honours the SSRF guard (so a model can't be
+     * fetched from a cloud-metadata / loopback sink), reports progress, and optionally
+     * verifies a SHA-256 (passing [expectedSha256] disables the silent-corruption path).
+     *
+     * @param onProgress called with (fraction 0..1, downloadedBytes, totalBytes). When
+     *                  the server omits Content-Length, fraction is -1f (indeterminate).
+     */
+    @Throws(IOException::class)
+    fun download(
+        url: String,
+        displayName: String,
+        expectedSha256: String? = null,
+        onProgress: ((Float, Long, Long) -> Unit)? = null,
+    ): LocalModel {
+        when (val v = HttpGuard.check(url, offlineMode = true)) {
+            is HttpGuard.Verdict.Deny -> throw IOException("SSRF 拦截：无法下载（${v.reason}）")
+            is HttpGuard.Verdict.Allow -> { /* proceed */ }
+        }
+        val dest = File(modelsDir, sanitize(displayName))
+        val part = File(modelsDir, sanitize(displayName) + ".part")
+        part.delete()
+        val digest = if (!expectedSha256.isNullOrBlank()) MessageDigest.getInstance("SHA-256") else null
+        var total = -1L
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "GET"
+            conn.instanceFollowRedirects = true
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 30_000
+            conn.useCaches = false
+            conn.setRequestProperty("User-Agent", "ACFCN/2.24")
+            conn.connect()
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                part.delete()
+                throw IOException("HTTP $code：下载失败")
+            }
+            total = conn.contentLengthLong.takeIf { it > 0 } ?: -1L
+            conn.inputStream.use { ins ->
+                part.outputStream().use { out ->
+                    val buf = ByteArray(1 shl 16)
+                    var read = 0L
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                        digest?.update(buf, 0, n)
+                        read += n
+                        if (onProgress != null) {
+                            onProgress(
+                                if (total > 0) (read.toFloat() / total).coerceIn(0f, 1f) else -1f,
+                                read,
+                                total,
+                            )
+                        }
+                    }
+                    out.flush()
+                }
+            }
+        } finally {
+            runCatching { conn.disconnect() }
+        }
+        if (digest != null) {
+            val hex = digest.digest().joinToString("") { "%02x".format(it) }
+            if (hex.lowercase() != expectedSha256!!.lowercase()) {
+                part.delete()
+                throw IOException("SHA-256 校验失败：期望 ${expectedSha256?.take(12)}… 实际 ${hex.take(12)}…")
+            }
+        }
+        if (!part.renameTo(dest)) {
+            part.delete()
+            throw IOException("下载落盘失败")
+        }
+        return registerModel(Uri.fromFile(dest), displayName, dest.length())
+    }
+
+    /**
+     * Shared model-construction path: sniff the format, parse GGUF / MNN metadata,
+     * build the [LocalModel], de-dup by URI, persist, and return it. Used by both
+     * [importUri] (content URI) and [download] / [importFile] (file URI).
+     */
+    private fun registerModel(uri: Uri, display: String, size: Long): LocalModel {
         val format = sniffFormat(uri, display)
         val info = if (format == "gguf") {
-            runCatching {
-                cr.openInputStream(uri)?.use { GgufHeader.parse(it) }
-            }.getOrNull()
+            runCatching { cr.openInputStream(uri)?.use { GgufHeader.parse(it) } }.getOrNull()
         } else null
         // An MNN model is a directory (or a zip of one), so peek inside the
         // archive for config.json — otherwise the list can only say "zip".
