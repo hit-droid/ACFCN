@@ -412,27 +412,31 @@ static bool detect_big_cluster(cpu_set_t *out) {
     CPU_ZERO(out);
     std::vector<int> cpus;
     if (!parse_online_cpus(cpus) || cpus.empty()) return false;
-    struct Core { int id; int score; };
-    std::vector<Core> cores;
-    bool have_capacity = false;
-    for (int c : cpus) {
+    const size_t n = cpus.size();
+    // Read one source for *all* cores before falling back, so scores never mix
+    // EAS capacity (e.g. 1024) with max-freq (e.g. 2800000) in the same ranking.
+    std::vector<int> score(n, 0);
+    bool any_capacity = false;
+    for (size_t i = 0; i < n; ++i) {
         char pb[160];
-        snprintf(pb, sizeof(pb), "/sys/devices/system/cpu/cpu%d/cpu_capacity", c);
+        snprintf(pb, sizeof(pb), "/sys/devices/system/cpu/cpu%d/cpu_capacity", cpus[i]);
         int s = read_cpu_int(pb);
-        if (s > 0) have_capacity = true;
-        if (!have_capacity || s <= 0) {
+        if (s > 0) { score[i] = s; any_capacity = true; }
+    }
+    if (!any_capacity) {
+        for (size_t i = 0; i < n; ++i) {
+            char pb[160];
             snprintf(pb, sizeof(pb),
-                     "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c);
-            s = read_cpu_int(pb);
+                     "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", cpus[i]);
+            int s = read_cpu_int(pb);
+            if (s > 0) score[i] = s;
         }
-        if (s < 0) s = 0;
-        cores.push_back({c, s});
     }
     int maxs = 0;
-    for (const auto &c : cores) maxs = std::max(maxs, c.score);
+    for (int s : score) maxs = std::max(maxs, s);
     bool added = false;
-    for (const auto &c : cores) {
-        if (maxs > 0 ? c.score >= maxs : true) { CPU_SET(c.id, out); added = true; }
+    for (size_t i = 0; i < n; ++i) {
+        if (maxs > 0 ? score[i] >= maxs : true) { CPU_SET(cpus[i], out); added = true; }
     }
     return added;
 }
@@ -1280,4 +1284,34 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeBigCoreInfo(
         JNIEnv *env, jobject /*thiz*/) {
     std::lock_guard<std::mutex> lk(g_gpu_log_mu);
     return env->NewStringUTF(g_big_core_report.c_str());
+}
+
+// Recommended llama.cpp worker count: big-cluster size intersected with this
+// process's allowed CPU set. Returns the allowed-set size when sysfs detection
+// is unavailable, then 4, so a device that blocks cpu_capacity still gets the
+// tuned default instead of the 2-thread floor. Keeping this next to
+// detect_big_cluster() means the thread count and the affinity mask can never
+// disagree.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeSuggestedThreads(
+        JNIEnv * /*env*/, jobject /*thiz*/) {
+    cpu_set_t allowed;
+    int allowed_n = 0;
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
+        allowed_n = CPU_COUNT(&allowed);
+    }
+    cpu_set_t big;
+    int big_n = 0;
+    int usable = 0;
+    if (detect_big_cluster(&big)) {
+        for (int c = 0; c < CPU_SETSIZE; ++c) {
+            if (!CPU_ISSET(c, &big)) continue;
+            ++big_n;
+            if (allowed_n == 0 || CPU_ISSET(c, &allowed)) ++usable;
+        }
+    }
+    int suggested = usable > 0 ? usable : (allowed_n > 0 ? allowed_n : 4);
+    LOGI("cpu threads: big=%d allowed=%d usable=%d -> suggested=%d",
+         big_n, allowed_n, usable, suggested);
+    return suggested;
 }

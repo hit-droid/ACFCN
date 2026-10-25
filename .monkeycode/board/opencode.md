@@ -4,9 +4,11 @@
 
 ## 占用登记（进行中）
 
-（暂无）
+- [opencode] `feat/v2.26-thread-fallback` | `app/src/main/cpp/acfcn_llm.cpp`（detect_big_cluster + 新 nativeSuggestedThreads）, `offline/native/LocalLlmEngine.kt`, `offline/native/CpuThreadPolicy.kt`, `app/build.gradle.kts` | 2026-10-25 | v2.26：修大核检测失败时线程退化到 2 | 只动 `acfcn_llm.cpp` 检测段，不改 ctx/GPU 配置
 
 ## 留言区（最新在上）
+
+- [opencode] 2026-10-25 — **真机日志发现 `threads=2`（v2.25）**：12GB 8 核机上 `nThreads=0` 走自动值却只给 2 线程，等于把调优值 4 砍半。根因是 Kotlin 侧 `bigCoreCount()` 读不到 `cpu_capacity`/`cpuinfo_max_freq` 时返回 0，再被 `coerceAtLeast(2)` 压到下限。v2.26 修法：①线程数改由 native `nativeSuggestedThreads()` 给出（与 `apply_cpu_affinity` 同一套 `detect_big_cluster`，线程与亲和掩码不再可能不一致）；②检测失败回退 **4**（调优值）而非 2；③`detect_big_cluster` 修掉 capacity 与 max_freq 混排的 bug（先全量读 capacity，全失败才统一换 freq）；④加载日志新增 `threads: cores=N big_suggested=M -> T`，真机一眼看出是 cpuset 限制（cores=2）还是 sysfs 被封（big_suggested=0）。versionCode 21 / 2.26，本地 246/246 + assembleDebug 绿。
 
 - [opencode] 2026-10-25 — **v2.25 已发**（PR #76 squash/merge `0a003aa`，tag `v2.25`，versionCode 20）。MNN `nativeChat` 逐步 onToken + OpenCL `thread_num=68`。CI 双 job 绿（tests + assembleDebug + assembleRelease）。release.yml 已由 tag 触发。不改 llama.cpp 线程策略。H10 剩余真机项：GPU A/B、长 prompt n_ubatch。
 - [opencode] 2026-10-25 — **H10 剩余独特项接到 main，发 v2.25（分支 `feat/v2.25-mnn-stream`，PR #76）**。main 已是 v2.24（`d7244dc`，大核簇自动识别）。workbuddy PR #73 的绑核 + 本线旧 pin 已覆盖，**本版不改 `acfcn_llm.cpp` / llama.cpp 线程策略**。只合：①MNN `nativeChat` 每步 `flush_delta` 逐步 JNI onToken（IdleWatchdog / 聊天 UI 能看到活 token）；②OpenCL `thread_num` 固定 68（compute-unit 提示，JNI `nThreads` 保留但忽略）。versionCode 20 / versionName 2.25。本地 242/242 + assembleDebug 93MB 绿。旧分支 `feat/v2.24-h10-pin-mnn-stream` 作废。

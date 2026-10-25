@@ -204,53 +204,24 @@ class LocalLlmEngine : OnDeviceEngine {
      * threads measured faster than 6 threads across both clusters on this SoC
      * class (paragon83114/llama-adreno: 4t on cores 0-3 = 31.4±0.0 vs 6t =
      * 30.5±1.5 tok/s, tg128), so the default is kept at or below 4. The big
-     * cluster size is detected from sysfs so the count tracks the actual
-     * hardware (e.g. 2 big cores -> 2 threads) instead of a fixed cap.
+     * cluster size comes from native sysfs detection so the count tracks the
+     * actual hardware (e.g. 2 big cores -> 2 threads) instead of a fixed cap;
+     * when detection is blocked it falls back to 4, never the 2-thread floor.
      * Override at runtime: adb shell setprop debug.acfcn.threads N
      */
     private fun defaultThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
-        // Cap at the detected big-core count (min 2), then clamp to [2,4] so we
-        // never oversubscribe beyond what the big cluster can usefully hold.
-        val big = bigCoreCount().coerceAtLeast(2)
-        return minOf(cores, big).coerceIn(2, 4)
+        // Ask native for the big-cluster size: it owns the sysfs detection used
+        // by apply_cpu_affinity, so threads and the affinity mask can no longer
+        // disagree. 0 means detection failed (e.g. OEM blocks cpu_capacity).
+        val suggested = runCatching { nativeSuggestedThreads() }.getOrDefault(0)
+        val threads = CpuThreadPolicy.resolveThreads(cores, suggested)
+        com.selfmod.agent.util.Diagnostics.log(
+            "engine",
+            "threads: cores=$cores big_suggested=$suggested -> $threads",
+        )
+        return threads
     }
-
-    // Count the "big" (highest-capacity) CPU cluster via sysfs. Returns 0 when
-    // detection is unavailable so callers fall back to their default.
-    private fun bigCoreCount(): Int = runCatching {
-        val online = java.io.File("/sys/devices/system/cpu/online").readText().trim()
-        val ids = parseOnlineCpus(online)
-        if (ids.isEmpty()) return@runCatching 0
-        val cap = ids.associateWith { cpu ->
-            readSysfsInt("/sys/devices/system/cpu/cpu$cpu/cpu_capacity")
-                .takeIf { it > 0 }
-                ?: readSysfsInt("/sys/devices/system/cpu/cpu$cpu/cpufreq/cpuinfo_max_freq")
-        }
-        val max = cap.values.maxOrNull() ?: 0
-        if (max <= 0) 0 else cap.count { it.value >= max }
-    }.getOrDefault(0)
-
-    private fun parseOnlineCpus(spec: String): List<Int> {
-        val out = mutableListOf<Int>()
-        for (part in spec.split(',')) {
-            val p = part.trim()
-            if (p.isEmpty()) continue
-            val rng = p.split('-')
-            if (rng.size == 2) {
-                val lo = rng[0].toIntOrNull() ?: continue
-                val hi = rng[1].toIntOrNull() ?: continue
-                for (c in lo..hi) out += c
-            } else {
-                p.toIntOrNull()?.let { out += it }
-            }
-        }
-        return out
-    }
-
-    private fun readSysfsInt(path: String): Int = runCatching {
-        java.io.File(path).readText().trim().toIntOrNull() ?: -1
-    }.getOrDefault(-1)
 
     private external fun nativeInit(
         modelPath: String,
@@ -277,6 +248,7 @@ class LocalLlmEngine : OnDeviceEngine {
     private external fun nativeLoadInfo(): String
     private external fun nativeLastChatStats(): String
     private external fun nativeBigCoreInfo(): String
+    private external fun nativeSuggestedThreads(): Int
 
     companion object {
         @Volatile
