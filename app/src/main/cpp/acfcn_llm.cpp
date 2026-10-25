@@ -656,6 +656,11 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     g_engine.abort_flag.store(false);
     free_locked();
 
+    // Phase timing surfaced in the in-app diagnostics: "loading" can sit still
+    // for a long time on a memory-tight device, and without these numbers there
+    // is no way to tell weight mapping from context/GPU-buffer setup.
+    const auto t_start = std::chrono::steady_clock::now();
+
     // Must run before llama_init_from_model(): the compute threadpools are
     // created there and inherit this thread's affinity mask.
     apply_cpu_affinity();
@@ -761,6 +766,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
         LOGE("failed to load model");
         return JNI_FALSE;
     }
+    const auto t_model = std::chrono::steady_clock::now();
     g_engine.vocab = llama_model_get_vocab(g_engine.model);
 
     llama_context_params cparams = llama_context_default_params();
@@ -852,6 +858,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     llama_set_abort_callback(g_engine.ctx, abort_trampoline, &g_engine);
     g_engine.n_ctx.store(nCtx);
     g_engine.n_batch = batch;
+    const auto t_ctx = std::chrono::steady_clock::now();
 
     // Build the load summary surfaced to Kotlin for the in-app diagnostics:
     // whether the build can offload, how many layers were requested, the CPU
@@ -876,6 +883,13 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 #endif
         info += "\n" + g_gpu_log;
         if (!g_big_core_report.empty()) info += "\n" + g_big_core_report;
+        auto ms = [](std::chrono::steady_clock::time_point a,
+                     std::chrono::steady_clock::time_point b) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+        };
+        info += "\nload_ms=" + std::to_string(ms(t_start, t_model))
+              + " ctx_ms=" + std::to_string(ms(t_model, t_ctx))
+              + " total_ms=" + std::to_string(ms(t_start, t_ctx));
         g_load_info = info;
     }
 

@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
@@ -114,5 +115,74 @@ class GgufHeaderTest {
         b.u64(2L) // promises 2 kv but provides none
         val bad: InputStream = b.toBytes().inputStream()
         GgufHeader.parseOrThrow(bad)
+    }
+
+    // --- KV cache sizing -----------------------------------------------------
+
+    private fun tempGguf(bytes: ByteArray): File =
+        File.createTempFile("gguf", ".bin").apply {
+            writeBytes(bytes)
+            deleteOnExit()
+        }
+
+    private fun start(kvCount: Long): Buf = Buf().apply {
+        raw(byteArrayOf(0x47, 0x47, 0x55, 0x46))
+        u32(3)
+        u64(0L)
+        u64(kvCount)
+    }
+
+    @Test
+    fun computesKvBytesPerTokenFromShape() {
+        // Qwen3-4B: 36 layers, 8 KV heads, head_dim 128, q8_0 KV (1 byte/elem).
+        val b = start(5)
+        b.str("general.architecture"); b.u32(8); b.str("qwen3")
+        b.str("qwen3.block_count"); b.u32(4); b.u32(36)
+        b.str("qwen3.attention.head_count"); b.u32(4); b.u32(32)
+        b.str("qwen3.attention.head_count_kv"); b.u32(4); b.u32(8)
+        b.str("qwen3.attention.key_length"); b.u32(4); b.u32(128)
+
+        assertEquals(36L * 8 * (128 + 128), GgufHeader.kvBytesPerToken(tempGguf(b.toBytes())))
+    }
+
+    @Test
+    fun derivesKeyLengthFromEmbeddingWhenAbsent() {
+        // llama-style header: no key_length/value_length, no head_count_kv.
+        val b = start(4)
+        b.str("general.architecture"); b.u32(8); b.str("llama")
+        b.str("llama.block_count"); b.u32(4); b.u32(22)
+        b.str("llama.attention.head_count"); b.u32(4); b.u32(32)
+        b.str("llama.embedding_length"); b.u32(4); b.u32(4096)
+
+        assertEquals(22L * 32 * (128 + 128), GgufHeader.kvBytesPerToken(tempGguf(b.toBytes())))
+    }
+
+    @Test
+    fun usesLargestHeadCountWhenKvHeadsIsAnArray() {
+        val b = start(4)
+        b.str("general.architecture"); b.u32(8); b.str("gemma3")
+        b.str("gemma3.block_count"); b.u32(4); b.u32(26)
+        b.str("gemma3.attention.head_count_kv"); b.u32(9); b.u32(4); b.u64(2); b.u32(4); b.u32(8)
+        b.str("gemma3.attention.key_length"); b.u32(4); b.u32(256)
+
+        assertEquals(26L * 8 * (256 + 256), GgufHeader.kvBytesPerToken(tempGguf(b.toBytes())))
+    }
+
+    @Test
+    fun stopsBeforeTokenizerArrays() {
+        // Shape first, then a huge array that is never walked.
+        val b = start(5)
+        b.str("general.architecture"); b.u32(8); b.str("qwen3")
+        b.str("qwen3.block_count"); b.u32(4); b.u32(36)
+        b.str("qwen3.attention.head_count_kv"); b.u32(4); b.u32(8)
+        b.str("qwen3.attention.key_length"); b.u32(4); b.u32(128)
+        b.str("tokenizer.ggml.tokens"); b.u32(9); b.u32(8); b.u64(500_000L)
+
+        assertEquals(36L * 8 * (128 + 128), GgufHeader.kvBytesPerToken(tempGguf(b.toBytes())))
+    }
+
+    @Test
+    fun kvIsZeroForNonGguf() {
+        assertEquals(0L, GgufHeader.kvBytesPerToken(tempGguf("hello".toByteArray())))
     }
 }

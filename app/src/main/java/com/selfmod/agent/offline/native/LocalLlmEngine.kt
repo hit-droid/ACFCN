@@ -1,5 +1,6 @@
 package com.selfmod.agent.offline.native
 
+import com.selfmod.agent.offline.GgufHeader
 import java.io.File
 
 /**
@@ -52,10 +53,18 @@ class LocalLlmEngine : OnDeviceEngine {
                 return false
             }
             val threads = if (nThreads > 0) nThreads else defaultThreads()
+            // KV is the only non-evictable allocation at load time (weights are
+            // mmap'd), so report it next to the RAM reading: it is what decides
+            // whether this context fits on the device.
+            val kvMb = runCatching {
+                val perToken = GgufHeader.kvBytesPerToken(modelFile)
+                if (perToken > 0) perToken * nCtx / (1024 * 1024) else 0L
+            }.getOrDefault(0L)
             com.selfmod.agent.util.Diagnostics.log(
                 "engine",
                 "load: ${modelFile.name} size=${modelFile.length() / (1024 * 1024)}MB " +
-                    "nCtx=$nCtx nBatch=$nBatch threads=$threads exists=${modelFile.canRead()}",
+                    "nCtx=$nCtx kv=${if (kvMb > 0) "≈${kvMb}MB" else "?"} " +
+                    "nBatch=$nBatch threads=$threads exists=${modelFile.canRead()}",
             )
             val t0 = System.currentTimeMillis()
             attempted = true

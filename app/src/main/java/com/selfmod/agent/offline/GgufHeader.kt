@@ -1,5 +1,7 @@
 package com.selfmod.agent.offline
 
+import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
@@ -36,7 +38,9 @@ object GgufHeader {
     private val MAGIC = byteArrayOf(0x47, 0x47, 0x55, 0x46)
     private const val MAX_KV = 1024
     private const val MAX_STRING = 1_000_000L
-    private const val MAX_ARRAY = 100_000L
+    // Tokenizer vocab/merges arrays run 150k+ entries on Qwen3; the parser only
+    // skips them, so the cap just bounds a malformed header.
+    private const val MAX_ARRAY = 2_000_000L
 
     private const val T_UINT8 = 0
     private const val T_INT8 = 1
@@ -54,8 +58,71 @@ object GgufHeader {
 
     fun parse(input: InputStream): GgufInfo? = runCatching { parseOrThrow(input) }.getOrNull()
 
+    /**
+     * Bytes of K+V cache per context token, straight from the GGUF metadata.
+     *
+     * The KV cache is the one large allocation that cannot be evicted (weights
+     * are mmap'd, clean pages), so its size is what decides whether a given
+     * context fits in the RAM left at load time.
+     *
+     * Assumes the shipping q8_0 KV type (1 byte per element). The f16 CPU
+     * fallback doubles it; f32 quadruples it.
+     *
+     * Reads only the header region and stops as soon as the shape is known, so
+     * tokenizer arrays (150k+ entries) are never walked.
+     *
+     * @return bytes/token, or 0 when the file is not GGUF / the shape is absent.
+     */
+    fun kvBytesPerToken(file: File): Long = runCatching {
+        FileInputStream(file).use { fis ->
+            val r = LittleReader(fis)
+            if (!r.bytes(4).contentEquals(MAGIC)) return@use 0L
+            val version = r.u32()
+            if (version !in 1..3) return@use 0L
+            r.u64() // tensor count
+            val kvCount = r.u64()
+            var arch = ""
+            val nums = HashMap<String, Long>()
+            var i = 0L
+            while (i < kvCount) {
+                i++
+                val key = r.str()
+                val t = r.u32()
+                when {
+                    key == "general.architecture" && t == T_STRING -> arch = r.str()
+                    key.endsWith(".attention.head_count_kv") && t == T_ARRAY ->
+                        nums[key] = r.arrayIntsMax()
+                    t == T_UINT32 || t == T_INT32 -> nums[key] = r.u32().toLong() and 0xffffffffL
+                    t == T_UINT64 || t == T_INT64 -> nums[key] = r.u64()
+                    else -> r.skipTyped(t)
+                }
+                if (key.startsWith("tokenizer.")) break
+                if (arch.isNotEmpty()) {
+                    val layers = nums["$arch.block_count"] ?: 0L
+                    val heads = nums["$arch.attention.head_count_kv"]
+                        ?: nums["$arch.attention.head_count"] ?: 0L
+                    val kLen = nums["$arch.attention.key_length"] ?: 0L
+                    val embd = nums["$arch.embedding_length"] ?: 0L
+                    if (layers > 0 && heads > 0 && (kLen > 0 || embd > 0)) break
+                }
+            }
+            if (arch.isEmpty()) return@use 0L
+            val layers = nums["$arch.block_count"] ?: return@use 0L
+            val kvHeads = nums["$arch.attention.head_count_kv"]
+                ?: nums["$arch.attention.head_count"] ?: return@use 0L
+            val heads = nums["$arch.attention.head_count"] ?: 0L
+            val embd = nums["$arch.embedding_length"] ?: 0L
+            val kLen = nums["$arch.attention.key_length"]
+                ?: if (heads > 0 && embd > 0) embd / heads else 0L
+            val vLen = nums["$arch.attention.value_length"] ?: kLen
+            if (layers <= 0 || kvHeads <= 0 || kLen <= 0) return@use 0L
+            // q8_0 KV: one byte per element for both K and V.
+            layers * kvHeads * (kLen + vLen)
+        }
+    }.getOrDefault(0L)
+
     fun parseOrThrow(input: InputStream): GgufInfo {
-        val r = LittleReader(input)
+        val r = LittleReader(input.buffered(1 shl 16))
         val magic = r.bytes(4)
         require(magic.contentEquals(MAGIC)) { "not a GGUF file" }
         val version = r.u32()
@@ -171,7 +238,26 @@ object GgufHeader {
             return "[$n]"
         }
 
-        private fun skipTyped(t: Int) {
+        fun arrayIntsMax(): Long {
+            val elem = u32()
+            val n = u64()
+            require(n in 0..MAX_ARRAY) { "array too long: $n" }
+            var max = 0L
+            repeat(n.toInt()) {
+                val v = when (elem) {
+                    T_UINT32, T_INT32 -> u32().toLong() and 0xffffffffL
+                    T_UINT64, T_INT64 -> u64()
+                    else -> {
+                        skipTyped(elem)
+                        0L
+                    }
+                }
+                if (v > max) max = v
+            }
+            return max
+        }
+
+        fun skipTyped(t: Int) {
             when (t) {
                 T_UINT8, T_INT8, T_BOOL -> u8()
                 T_UINT16, T_INT16 -> bytes(2)
