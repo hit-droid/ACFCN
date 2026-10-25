@@ -408,6 +408,12 @@ static bool parse_online_cpus(std::vector<int> &cpus) {
 // (the highest-capacity cores). Uses EAS cpu_capacity when present, else
 // cpuinfo_max_freq, else treats all cores as equal (uses all). Returns true if
 // `out` was populated. This is what makes the pinning device-agnostic.
+//
+// Tier rule: take every core in the top tier. When the top tier is a lone prime
+// core (very common — e.g. cpu_capacity 1024 on the X2 vs ~900 on the A710s),
+// also take the next tier down when it stays within 75% of the peak, so the pin
+// covers the whole performance cluster instead of one core. Pinning a 4B model
+// to a single core is what produced `big_suggested=1 -> threads=2`.
 static bool detect_big_cluster(cpu_set_t *out) {
     CPU_ZERO(out);
     std::vector<int> cpus;
@@ -434,9 +440,21 @@ static bool detect_big_cluster(cpu_set_t *out) {
     }
     int maxs = 0;
     for (int s : score) maxs = std::max(maxs, s);
+    // Highest tier strictly below the peak, used to widen a lone prime core.
+    int nexts = 0;
+    for (int s : score) if (s < maxs) nexts = std::max(nexts, s);
+    int floor_score = maxs;
+    if (maxs > 0 && nexts > 0 && (long long) nexts * 100 >= (long long) maxs * 75) {
+        int top_n = 0;
+        for (int s : score) if (s == maxs) ++top_n;
+        if (top_n < 2) floor_score = nexts;
+    }
     bool added = false;
     for (size_t i = 0; i < n; ++i) {
-        if (maxs > 0 ? score[i] >= maxs : true) { CPU_SET(cpus[i], out); added = true; }
+        if (maxs > 0 ? (score[i] >= floor_score && score[i] > 0) : true) {
+            CPU_SET(cpus[i], out);
+            added = true;
+        }
     }
     return added;
 }
@@ -1303,15 +1321,18 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeSuggestedThreads(
     cpu_set_t big;
     int big_n = 0;
     int usable = 0;
+    std::string mask;
     if (detect_big_cluster(&big)) {
         for (int c = 0; c < CPU_SETSIZE; ++c) {
             if (!CPU_ISSET(c, &big)) continue;
             ++big_n;
+            if (!mask.empty()) mask += ",";
+            mask += std::to_string(c);
             if (allowed_n == 0 || CPU_ISSET(c, &allowed)) ++usable;
         }
     }
     int suggested = usable > 0 ? usable : (allowed_n > 0 ? allowed_n : 4);
-    LOGI("cpu threads: big=%d allowed=%d usable=%d -> suggested=%d",
-         big_n, allowed_n, usable, suggested);
+    LOGI("cpu threads: big=%d [%s] allowed=%d usable=%d -> suggested=%d",
+         big_n, mask.c_str(), allowed_n, usable, suggested);
     return suggested;
 }
