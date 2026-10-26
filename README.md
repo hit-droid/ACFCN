@@ -36,6 +36,11 @@ adb shell setprop debug.acfcn.gpu_layers 99
 
 # 覆盖线程数（默认按 CPU 核数）
 adb shell setprop debug.acfcn.threads 8
+
+# 覆盖 prefill 批处理规模（n_batch == n_ubatch，默认按机型 RAM 分档）
+# 长 prompt 时加大可显著加速 prefill（更少的 decode 调用）；真机 A/B 调优时
+# 不用重新打包，下次加载模型生效
+adb shell setprop debug.acfcn.batch 512
 ```
 
 ### 端侧加速（大核线程策略）
@@ -68,6 +73,24 @@ adb logcat -s ACFCN-LLM
 ```
 
 重点看 `n_gpu_layers=`、`OpenCL: using ICD ...`、`prefill done ... tok/s`、`decode done ... tok/s`。
+
+### 端侧加速（批量 prefill 调优与诊断）
+
+解码逐 token、瓶颈在 KV 带宽；而**首 token / 长 prompt 的 prefill** 是一次把整段提示词喂给模型，瓶颈在算力与每次 `llama_decode` 调用的固定开销。引擎把 `n_batch` 与 `n_ubatch` **设成同一值**（默认即如此），于是单次 `llama_decode` 就能并行处理整块提示词；prefill 循环按 `min(n_batch, 剩余)` 切块，所以：
+
+- **所有长度的 prompt 调用次数都更少、首 token 延迟更低**（总计算量不变，但每次调用的固定开销与并行度更优）；`n_batch ≥ prompt 长度` 时整段一次喂完。
+- 长 prompt 相对收益最大——例如 2000 token 在 64 下要约 32 次调用，512 下只要约 4 次（**约 8× 更少的 kernel 启动**），GPU 上每次调用固定开销占比更高、收益最大。
+
+`n_batch` 越大，临时计算图缓冲（按 n_batch 个 token 规模分配，不是 KV 缓存）越大，但相对 KV 缓存只是零头。默认按机型 RAM 分档（见 `AgentViewModel`：6GB→32、7–10GB→128、11–19GB→256、≥20GB→512）。本版新增 **`debug.acfcn.batch` 运行时覆盖**（上限抬到 2048），方便**真机 A/B 验证 prefill 提速而无需重新打包**：
+
+```bash
+# 真机 A/B：对比默认与加大批处理的 prefill tok/s（看 logcat 的 prefill done ... tok/s）
+adb shell setprop debug.acfcn.batch 512
+# 恢复默认（清掉属性，下次加载模型生效）
+adb shell setprop debug.acfcn.batch ""
+```
+
+离线页「诊断日志」加载后会多一行 `prefill_batch: n_batch=... n_ubatch=...`，确认本次加载实际生效的 prefill 批处理规模与是否走了覆盖。
 
 本地从源码构建时，如需自行验证 OpenCL 路径：
 
