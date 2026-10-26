@@ -27,12 +27,7 @@ class LocalLlmEngine : OnDeviceEngine {
     /**
      * @param nCtx context window (tokens). Larger = more RAM. 1024 is safer on 6GB phones.
      * @param nThreads worker threads; pass 0 to auto-detect.
-     * @param nBatch prompt-eval (prefill) batch size. Both llama.cpp `n_batch`
-     *   and `n_ubatch` are set to this value, so each `llama_decode` call
-     *   parallelises the whole prompt chunk (prefill tok/s scales with chunk
-     *   size, especially on GPU). Larger = faster prefill on long prompts but a
-     *   bigger transient compute-graph buffer. Runtime override:
-     *   `adb shell setprop debug.acfcn.batch N` (next load).
+     * @param nBatch prompt-eval chunk size. Smaller = less RAM / slower prefill.
      * @return false when another load is already in flight.
      */
     fun load(
@@ -87,10 +82,6 @@ class LocalLlmEngine : OnDeviceEngine {
                     .filter { it.isNotEmpty() }
                     .forEach { com.selfmod.agent.util.Diagnostics.log("gpu", it) }
                 runCatching { nativeBigCoreInfo() }
-                    .getOrDefault("")
-                    .takeIf { it.isNotEmpty() }
-                    ?.let { com.selfmod.agent.util.Diagnostics.log("perf", it) }
-                runCatching { nativeBatchInfo() }
                     .getOrDefault("")
                     .takeIf { it.isNotEmpty() }
                     ?.let { com.selfmod.agent.util.Diagnostics.log("perf", it) }
@@ -266,7 +257,6 @@ class LocalLlmEngine : OnDeviceEngine {
     private external fun nativeLoadInfo(): String
     private external fun nativeLastChatStats(): String
     private external fun nativeBigCoreInfo(): String
-    private external fun nativeBatchInfo(): String
     private external fun nativeSuggestedThreads(): Int
 
     companion object {
