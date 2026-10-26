@@ -627,7 +627,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 } else ctxCap
                 val nBatch = when {
                     totalRamMb < 7000 -> 32
-                    totalRamMb < 11000 -> 64
+                    totalRamMb < 11000 -> 128
                     totalRamMb < 20000 -> 256
                     else -> 512
                 }
