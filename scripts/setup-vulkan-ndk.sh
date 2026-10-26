@@ -67,11 +67,17 @@ echo "glslc:    $(command -v glslc) ($(glslc --version | head -1))"
 # --- Stage Vulkan-HPP ---------------------------------------------------------
 # Only the .hpp files: the C headers (vulkan.h, vulkan_core.h, ...) already
 # ship with the NDK and must not be overwritten (they match the NDK's API
-# level split).
+# level split). Use `cp -n` (no-clobber) so we never overwrite a header the
+# NDK already provides: NDK 27's sysroot ships its own version-matched
+# vulkan.hpp (e.g. VK_HEADER_VERSION 275), and overwriting it with the host's
+# libvulkan-dev vulkan.hpp (a newer VK_HEADER_VERSION on refreshed runner
+# images) makes vulkan.hpp disagree with the NDK's vulkan_core.h and fails the
+# build with "Wrong VK_HEADER_VERSION!". `cp -n` keeps the NDK's matching
+# pair and only fills in headers the NDK is actually missing.
 VK_INC="$SYSROOT/usr/include/vulkan"
 mkdir -p "$VK_INC"
 for f in /usr/include/vulkan/*.hpp; do
-  cp "$f" "$VK_INC/"
+  cp -n "$f" "$VK_INC/"
 done
 echo "Staged Vulkan-HPP -> $VK_INC ($(ls "$VK_INC"/*.hpp | wc -l) headers)"
 
