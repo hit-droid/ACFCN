@@ -52,11 +52,6 @@ static std::string g_load_info;
 // (which cores were pinned, or why affinity was skipped), surfaced via
 // nativeBigCoreInfo() and folded into the in-app diagnostics.
 static std::string g_big_core_report;
-// perf: human-readable report of the prefill-batch decision made at model load
-// (effective n_batch == n_ubatch and whether a debug.acfcn.batch override
-// applied), surfaced via nativeBatchInfo() and folded into the in-app
-// diagnostics. Lets a device A/B prefill batch size without rebuilding.
-static std::string g_batch_report;
 
 static void llama_log_to_logcat(enum ggml_log_level level, const char *text, void * /*user_data*/) {
     if (text == nullptr) return;
@@ -87,9 +82,9 @@ static void llama_log_to_logcat(enum ggml_log_level level, const char *text, voi
 //   adb shell setprop debug.acfcn.gpu_layers 99 # offload all layers to GPU
 //   adb shell setprop debug.acfcn.gpu_layers 0  # force CPU
 //   adb shell setprop debug.acfcn.threads 8     # override thread count
-//   adb shell setprop debug.acfcn.batch 512     # override prefill/work batch (n_batch == n_ubatch)
 //   adb shell setprop debug.acfcn.cpu_affinity 0-3  # pin engine to big cores ("none" = off)
 //   adb shell setprop debug.acfcn.opencl_xmem 0    # disable Adreno xmem GEMM (default on)
+//   adb shell setprop debug.acfcn.warmup 0         # skip GPU kernel warmup at load (default on)
 // Property changes take effect on the next model load.
 static int get_property_int(const char *name, int fallback) {
     char value[PROP_VALUE_MAX] = {0};
@@ -777,25 +772,12 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 
     llama_context_params cparams = llama_context_default_params();
     int batch = nBatch > 0 ? (int) nBatch : 64;
-    int prop_batch = get_property_int("debug.acfcn.batch", 0);
-    if (prop_batch > 0) batch = prop_batch;   // runtime A/B override for prefill tuning
     if (batch < 8) batch = 8;
-    // Raise the ceiling from 512 -> 2048 so large prefill batches are usable on
-    // high-RAM devices (the prompt is fed in min(n_batch, remaining) chunks per
-    // llama_decode call, so a bigger n_batch => fewer, wider calls => faster
-    // prefill). RAM cost is only the transient compute-graph scratch sized for
-    // n_batch tokens, not the KV cache (that is n_ctx), so the trade is modest.
-    if (batch > 2048) batch = 2048;
+    if (batch > 512) batch = 512;
     int threads = nThreads;
     int prop_threads = get_property_int("debug.acfcn.threads", 0);
     if (prop_threads > 0) threads = prop_threads;
     cparams.n_ctx     = (uint32_t) nCtx;
-    // n_batch and n_ubatch are kept equal so each llama_decode call parallelises
-    // the whole prompt chunk (prefill tok/s scales with chunk width, especially
-    // on GPU where fixed per-call overhead dominates). The prefill loop in
-    // generate_impl() feeds min(n_batch, remaining) tokens per call, so short
-    // prompts stay in a handful of calls while long prompts split into far
-    // fewer, wider calls than the old 64-token default.
     cparams.n_batch   = (uint32_t) batch;
     cparams.n_ubatch  = (uint32_t) batch;
     cparams.n_threads = threads;
@@ -849,8 +831,22 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
             return llama_init_from_model(g_engine.model, cparams);
         };
         if (mparams.n_gpu_layers == 0) {
-            // CPU-only path: unchanged f16 KV, no FA (portable across arm64).
-            g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
+            // CPU-only path: q8_0 KV by default — this is the single biggest
+            // remaining CPU-decode speedup and the main reason MNN's CPU path
+            // is fast. Decode is memory-bandwidth bound and re-reads the entire
+            // KV cache on every token, so halving KV width (f16 -> q8_0, 2 -> 1
+            // byte/element) ~halves that read for ~no quality loss on typical
+            // chat models. Flash attention stays off on CPU (no clear win,
+            // maximum portability across the arm64 fleet). If the q8_0 CPU KV
+            // buffer cannot be built for some reason, fall back to f16 KV so a
+            // capacity problem degrades speed, never loadability.
+            //   debug.acfcn.kv = f16   # revert to the old portable path
+            g_engine.ctx = make_ctx(ktype, false);
+            if (!g_engine.ctx && ktype != GGML_TYPE_F16) {
+                LOGI("cpu ctx build failed with kv=%s; retrying f16 KV",
+                     ggml_type_name(ktype));
+                g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
+            }
         } else if (use_fa) {
             g_engine.ctx = make_ctx(ktype, true);
             if (!g_engine.ctx) {
@@ -866,13 +862,8 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
              gpu_how.empty() ? "cpu" : gpu_how.c_str(), (int) mparams.n_gpu_layers);
     }
 
-    LOGI("ctx params: n_ctx=%u n_batch=%u n_ubatch=%u threads=%d (batch override=%s)",
-         cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, threads,
-         prop_batch > 0 ? "yes" : "no");
-    g_batch_report = std::string("prefill_batch: n_batch=") + std::to_string(batch)
-                    + " n_ubatch=" + std::to_string(batch)
-                    + (prop_batch > 0 ? " (debug.acfcn.batch override)"
-                                      : " (app RAM tier / default 64)");
+    LOGI("ctx params: n_ctx=%u n_batch=%u n_ubatch=%u threads=%d",
+         cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, threads);
 
     if (!g_engine.ctx) {
         LOGE("failed to create context");
@@ -882,6 +873,66 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     llama_set_abort_callback(g_engine.ctx, abort_trampoline, &g_engine);
     g_engine.n_ctx.store(nCtx);
     g_engine.n_batch = batch;
+
+    // --- Kernel warmup (moves first-chat latency into model load) -----------
+    // The first llama_decode() on a GPU backend compiles every kernel it
+    // touches — Adreno drivers keep no shader cache across processes — so
+    // that cost used to be billed to the user's first message (seconds of
+    // "stuck" first token after a perfectly fast load). Decode one token
+    // here (the exact shape every generated token costs) plus a small
+    // prefill-shaped batch, then wipe the KV cache: the work happens while
+    // the load progress bar is still on screen. Non-fatal by design — a
+    // warmup failure only falls back to paying it at first chat.
+    //   debug.acfcn.warmup = 0   # disable (default: on)
+    std::string warmup_report;
+    {
+        char value[PROP_VALUE_MAX] = {0};
+        bool warmup = true;
+        int len = __system_property_get("debug.acfcn.warmup", value);
+        if (len > 0) {
+            std::string v(value);
+            warmup = !(v == "0" || v == "off" || v == "false");
+        }
+        if (!warmup) {
+            LOGI("kernel warmup disabled via debug.acfcn.warmup");
+            warmup_report = "kernel warmup: disabled";
+        } else if (g_engine.abort_flag.load()) {
+            // Load itself was cancelled; do not start new GPU work.
+            warmup_report = "kernel warmup: skipped (load aborted)";
+        } else {
+            llama_memory_t wmem = llama_get_memory(g_engine.ctx);
+            llama_token warm = llama_vocab_bos(g_engine.vocab);
+            const int wpf = std::min((int) g_engine.n_batch, 64);
+            int wrc = -1;
+            if (warm >= 0) {
+                // 1) decode shape: one token, what every generated token costs
+                llama_batch wb = llama_batch_get_one(&warm, 1);
+                wrc = llama_decode(g_engine.ctx, wb);
+                // 2) prefill shape: a small ubatch (shape-generic kernels cover
+                //    the larger real prefills from here)
+                if (wrc == 0) {
+                    std::vector<llama_token> pad(wpf > 1 ? wpf : 1, warm);
+                    llama_batch pb = llama_batch_get_one(pad.data(), (int) pad.size());
+                    wrc = llama_decode(g_engine.ctx, pb);
+                }
+            }
+            llama_memory_clear(wmem, true);   // warmup must not pollute the KV
+            if (warm < 0) {
+                LOGI("kernel warmup skipped: no BOS token");
+                warmup_report = "kernel warmup: skipped (no BOS)";
+            } else if (wrc == 0) {
+                LOGI("kernel warmup done (decode + %d-token prefill shape), kv cleared", wpf);
+                warmup_report = "kernel warmup: ok (decode + " + std::to_string(wpf) + "-token prefill)";
+            } else {
+                LOGI("kernel warmup decode failed rc=%d (non-fatal; first chat pays it)", wrc);
+                warmup_report = "kernel warmup: failed rc=" + std::to_string(wrc);
+            }
+            // A cancel pressed during the warmup window was aimed at the load
+            // UI, which has already finished; leaving abort_flag set would
+            // instantly cancel the next chat instead.
+            g_engine.abort_flag.store(false);
+        }
+    }
     const auto t_ctx = std::chrono::steady_clock::now();
 
     // Build the load summary surfaced to Kotlin for the in-app diagnostics:
@@ -907,7 +958,7 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
 #endif
         info += "\n" + g_gpu_log;
         if (!g_big_core_report.empty()) info += "\n" + g_big_core_report;
-        if (!g_batch_report.empty()) info += "\n" + g_batch_report;
+        if (!warmup_report.empty()) info += "\n" + warmup_report;
         auto ms = [](std::chrono::steady_clock::time_point a,
                      std::chrono::steady_clock::time_point b) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
@@ -1341,17 +1392,6 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeBigCoreInfo(
         JNIEnv *env, jobject /*thiz*/) {
     std::lock_guard<std::mutex> lk(g_gpu_log_mu);
     return env->NewStringUTF(g_big_core_report.c_str());
-}
-
-// H10 批量 prefill 调优: one-line summary of the prefill-batch decision at the
-// last model load (effective n_batch == n_ubatch and whether an override
-// applied), so the in-app diagnostics can confirm the prefill tuning took
-// effect without adb.
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeBatchInfo(
-        JNIEnv *env, jobject /*thiz*/) {
-    std::lock_guard<std::mutex> lk(g_gpu_log_mu);
-    return env->NewStringUTF(g_batch_report.c_str());
 }
 
 // Recommended llama.cpp worker count: big-cluster size intersected with this
