@@ -783,23 +783,27 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
     cparams.n_threads = threads;
     cparams.n_threads_batch = threads;
 
-    // Flash attention + KV cache quantization (OpenCL/Adreno and Vulkan).
+    // Flash attention + KV cache quantization, unified across the GPU and CPU
+    // decode paths (the "match MNN speed" line).
     //
-    // Decode is memory-bandwidth bound and reads the whole KV cache on every
-    // token, so KV *width* is the dominant per-token cost. q8_0 KV is 4x
-    // smaller than f32 (1 vs 4 bytes), cutting both KV memory (ctx4096 on the
-    // 4B model: ~1.15GiB -> ~288MiB) and per-token KV bandwidth while keeping
-    // flash attention fused. Both GPU backends have a quantized-KV FA path:
-    // ggml-opencl ships a dedicated q8_0 FA variant (FA_VARIANT_Q8_0) plus a
-    // q4_0 variant, and ggml-vulkan's FA dequantizes q8_0 K/V inline. q4_0 KV
-    // (8x) is available behind debug.acfcn.kv=q4_0 for a more aggressive trade.
+    // Decode is memory-bandwidth bound and re-reads the whole KV cache on every
+    // token, so KV *width* and the attention memory traffic are the dominant
+    // per-token costs. q8_0 KV is 4x smaller than f32 (1 vs 4 bytes), and flash
+    // attention fuses the softmax into registers so the K/V are read once per
+    // query instead of being scattered across the naive attention loops — this
+    // is exactly what makes MNN's CPU path fast. Both GPU backends and the
+    // current llama.cpp CPU backend have a quantized-KV FA path: ggml-opencl
+    // ships a dedicated q8_0 FA variant (FA_VARIANT_Q8_0) plus a q4_0 variant,
+    // ggml-vulkan's FA dequantizes q8_0 K/V inline, and ggml-cpu's FA dequant
+    // q8_0 K/V as it streams. q4_0 KV (8x) is available behind debug.acfcn.kv.
     //
     // Tunables (take effect on the next model load):
     //   debug.acfcn.fa=off                 -> f16 KV, flash attn off (old safe path)
     //   debug.acfcn.kv=q8_0|q4_0|f16|f32   -> KV cache type for the FA path (default q8_0)
-    // Any context that fails to build with the quantized KV (e.g. a driver that
-    // cannot compile the q8_0 FA kernel) falls back to f16 KV + FA off, so a
-    // kernel problem degrades speed, not loadability.
+    // Any context that fails to build with the quantized KV + FA (e.g. a CPU
+    // core without a matching FA kernel, or the OpenCL/Adreno f16-KV compiler
+    // crash) falls back to f16 KV + FA off, so a kernel problem degrades speed,
+    // not loadability.
     {
         char value[PROP_VALUE_MAX] = {0};
         bool fa = true;
@@ -817,12 +821,14 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
             else if (v == "f32")  ktype = GGML_TYPE_F32;
             else if (v == "q8_0") ktype = GGML_TYPE_Q8_0;
         }
-        // f16 KV cannot pair with FA on the OpenCL/Adreno driver (the E031.41
-        // compiler crash that started all this); Vulkan's FA has a native
-        // f16-KV variant, so only gate the OpenCL path.
+        // Flash attention is a *quantized*-KV optimization: it dequantizes the
+        // q8_0/q4_0 K/V as it streams, so it only makes sense with a quantized
+        // KV. f16/f32 are the explicit escape hatches (debug.acfcn.kv) and stay
+        // on the old plain attention, matching PR #87's "kv=f16/f32 revert to
+        // safe" contract — this also sidesteps the OpenCL/Adreno f16-KV compiler
+        // crash (E031.41) that originally forced FA off on that backend.
         const bool use_fa =
-            fa && mparams.n_gpu_layers != 0 &&
-            (ktype != GGML_TYPE_F16 || gpu_how != "opencl");
+            fa && (ktype == GGML_TYPE_Q8_0 || ktype == GGML_TYPE_Q4_0);
         auto make_ctx = [&](ggml_type kt, bool fa_on) -> llama_context * {
             cparams.type_k = kt;
             cparams.type_v = kt;
@@ -830,32 +836,24 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
                                             : LLAMA_FLASH_ATTN_TYPE_DISABLED;
             return llama_init_from_model(g_engine.model, cparams);
         };
-        if (mparams.n_gpu_layers == 0) {
-            // CPU-only path: q8_0 KV by default — this is the single biggest
-            // remaining CPU-decode speedup and the main reason MNN's CPU path
-            // is fast. Decode is memory-bandwidth bound and re-reads the entire
-            // KV cache on every token, so halving KV width (f16 -> q8_0, 2 -> 1
-            // byte/element) ~halves that read for ~no quality loss on typical
-            // chat models. Flash attention stays off on CPU (no clear win,
-            // maximum portability across the arm64 fleet). If the q8_0 CPU KV
-            // buffer cannot be built for some reason, fall back to f16 KV so a
-            // capacity problem degrades speed, never loadability.
-            //   debug.acfcn.kv = f16   # revert to the old portable path
-            g_engine.ctx = make_ctx(ktype, false);
-            if (!g_engine.ctx && ktype != GGML_TYPE_F16) {
-                LOGI("cpu ctx build failed with kv=%s; retrying f16 KV",
-                     ggml_type_name(ktype));
-                g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
-            }
-        } else if (use_fa) {
-            g_engine.ctx = make_ctx(ktype, true);
-            if (!g_engine.ctx) {
-                LOGI("ctx build failed with kv=%s + FA; retrying f16 KV, FA off",
-                     ggml_type_name(ktype));
-                g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
-            }
-        } else {
-            g_engine.ctx = make_ctx(ktype, false);
+        // Try the quantized-KV + FA path first, GPU and CPU alike. The previous
+        // build hard-coded the CPU-only path to f16 + FA-off "for portability";
+        // that left every no-GPU-offload device (the majority of CPU-only
+        // builds) on the slow path. Quantized-KV FA on CPU is the single
+        // biggest remaining CPU-decode speedup and the main reason MNN's CPU
+        // path is fast: it fuses the softmax into registers and dequantizes the
+        // q8_0 K/V as it streams, so the per-token attention memory traffic
+        // roughly halves vs. the old f16 naive attention. If the quantized-KV +
+        // FA context cannot build (a CPU core without a matching FA kernel, or
+        // the OpenCL/Adreno f16-KV compiler crash), fall back to f16 KV + FA
+        // off so a kernel/capacity problem degrades speed, never loadability.
+        //   debug.acfcn.fa=off  -> revert to f16 + FA-off on CPU too
+        //   debug.acfcn.kv=f16  -> quantized-KV build skipped, f16 + FA off
+        g_engine.ctx = make_ctx(ktype, use_fa);
+        if (!g_engine.ctx) {
+            LOGI("ctx build failed with kv=%s + FA=%s; retrying f16 KV, FA off",
+                 ggml_type_name(ktype), use_fa ? "on" : "off");
+            g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
         }
         LOGI("flash attn %s, kv cache %s on %s (n_gpu_layers=%d)",
              use_fa ? "enabled" : "disabled", ggml_type_name(cparams.type_k),
