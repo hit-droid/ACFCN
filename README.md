@@ -70,15 +70,36 @@ Adreno 驱动没有跨进程的 shader 缓存，第一次 `llama_decode` 会把�
 adb shell setprop debug.acfcn.warmup 0
 ```
 
-### 端侧加速（CPU 量化 KV 缓存，对齐 MNN）
+### 端侧加速（CPU 量化 KV 缓存 + FlashAttention，对齐 MNN）
 
-**纯 CPU 解码路径默认启用 `q8_0` 量化 KV 缓存**（与 GPU 路径一致）。解码是内存带宽瓶颈，每个 token 都要把整段 KV 缓存读一遍，因此 KV 宽度是逐 token 成本的主导项：`q8_0` 把 KV 从 f16（2 字节）压到 1 字节，KV 内存与每 token 读取带宽都砍半，常见聊天模型几乎无损，这正是 MNN CPU 路径快的主因。GPU 路径早已默认 `q8_0` KV + FlashAttention；现在 CPU 路径也补齐这一环，使**无 GPU offload 的机型（也就是大多数只装 CPU 构建的机器）解码速度直接对齐 MNN**。
+**纯 CPU 解码路径默认启用 `q8_0` 量化 KV 缓存 + FlashAttention**（与 GPU 路径统一）。解码是内存带宽瓶颈，每个 token 都要把整段 KV 缓存读一遍，因此 KV 宽度与注意力内存流量是逐 token 成本的主导项：
 
-- 默认（不设 `debug.acfcn.kv`）CPU 与 GPU 都用 `q8_0` KV；
-- 想退回旧的可移植 f16 路径（极端老设备或要做 A/B 对照）：`debug.acfcn.kv=f16`；
-- 更激进可试 `debug.acfcn.kv=q4_0`（KV 再压到 0.5 字节，质量换速度）。
+- `q8_0` 把 KV 从 f16（2 字节）压到 1 字节，**KV 内存与每 token 读取带宽都砍半**；
+- **FlashAttention 把 softmax 融合进寄存器**，KV 随流内联反量化、按需读取，比旧的 f16 朴素注意力再砍掉约一半注意力内存流量。
 
-若某设备无法为 `q8_0` 构建 CPU KV 缓冲，引擎自动回退到 f16 KV，因此内核/容量问题只会损失速度、不会加载失败。离线页「诊断日志」加载后会显示 `kv cache Q8_0 on cpu`（或回退的 `F16`），确认本次生效。
+这正是 MNN CPU 路径快的主因。GPU 路径早已默认 `q8_0` KV + FlashAttention；现在 CPU 路径也补齐这一环，使**无 GPU offload 的机型（也就是大多数只装 CPU 构建的机器）解码速度直接对齐 MNN**。量化 KV + FA 无法构建时（某些缺少对应 FA 内核的 CPU，或 OpenCL/Adreno 的 f16-KV 编译崩），引擎自动回退到 f16 KV + FA off，因此内核/容量问题只会损失速度、不会加载失败。
+
+运行时开关（下次加载模型生效）：
+
+```bash
+# 退回旧的可移植路径（极端老设备或 A/B 对照）：f16 KV + 关 FA
+adb shell setprop debug.acfcn.kv f16
+adb shell setprop debug.acfcn.fa off
+
+# 更激进可试 q4_0（KV 压到 0.5 字节，质量换速度）
+adb shell setprop debug.acfcn.kv q4_0
+```
+
+离线页「诊断日志」加载后会显示 `flash attn enabled, kv cache q8_0 on cpu`（或回退的 `f16`），确认本次生效。
+
+### 端侧加速（可选：ARM KleidiAI CPU GEMM）
+
+LLM 解码的主成本是按 token 读取权重做矩阵乘。llama.cpp 的 ARM NEON GEMM 已经不错，但要**真正比肩 MNN 的手调 NEON GEMM**，可开启 ARM 官方的 [KleidiAI](https://github.com/ARM-software/kleidiai) 内核（Cortex-A 专用优化）。它在 CMake 配置阶段从 ARM-software/kleidiai 拉取发布包，目前**默认关闭**——需要 NDK 工具链真机验证后再默认开启：
+
+```bash
+# 构建时开启 KleidiAI GEMM（默认关）
+ACFCN_KLEIDIAI=true ./gradlew :app:assembleDebug
+```
 
 App 离线页「诊断日志」在加载后会显示：本构建是否支持 GPU offload、请求的 GPU 层数、CPU 指令集（确认 dotprod 已启用）、以及 llama.cpp 打印的 OpenCL 设备与实际放置到 GPU 的层数；生成后还会显示首 token、总耗时与解码 tok/s。以上均无需 adb。详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：
 
