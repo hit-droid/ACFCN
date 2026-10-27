@@ -87,6 +87,9 @@ echo "glslc:    $(command -v glslc) ($(glslc --version | head -1))"
 # ship C headers alone).
 VK_INC="$SYSROOT/usr/include/vulkan"
 mkdir -p "$VK_INC"
+# Staging root: the whole Vulkan-Headers include/ tree (vulkan/ AND vk_video/)
+# is laid down here so every transitive #include resolves against usr/include.
+VK_STAGE="$SYSROOT/usr/include"
 VK_VER=""
 for cand in "$VK_INC/vulkan.hpp" /usr/include/vulkan/vulkan.hpp; do
   if [ -f "$cand" ]; then
@@ -130,38 +133,52 @@ except Exception:
     sys.exit(0)
 for t in d.get('tree', []):
     p = t.get('path', '')
-    if p.startswith('include/vulkan/') and (p.endswith('.hpp') or p.endswith('.h')):
-        print(p.split('/')[-1])
+    if p.startswith('include/') and (p.endswith('.hpp') or p.endswith('.h')):
+        # Keep the path relative to include/ so subdirectories (e.g. vk_video/)
+        # are preserved when staged — vulkan_core.h #includes them as
+        # "vk_video/vulkan_video_codec_av1std.h", which resolves against the
+        # include root (usr/include), NOT usr/include/vulkan/.
+        print(p[len('include/'):])
 ") )
 fi
 if [ "${#HPP_FILES[@]}" -eq 0 ]; then
   echo "Vulkan-Headers tree API unavailable; using known file list for $VK_TAG"
-  HPP_FILES=( vulkan.hpp vulkan_core.h vulkan.h vulkan_directfb.h vulkan_xcb.h \
-    vulkan_wayland.h vulkan_xlib.h vulkan_mir.h vulkan_screen.h vulkan_fuchsia.h \
-    vulkan_ggp.h vulkan_macos.h vulkan_vi.h vulkan_win32.h vulkan_enums.hpp \
-    vulkan_extension_inspection.hpp vulkan_format_traits.hpp vulkan_funcs.hpp \
-    vulkan_handles.hpp vulkan_hash.hpp vulkan_hpp_macros.hpp vulkan_raii.hpp \
-    vulkan_shared.hpp vulkan_static_assertions.hpp vulkan_structs.hpp \
-    vulkan_to_string.hpp vulkan_video.hpp )
+  HPP_FILES=( vulkan/vulkan.hpp vulkan/vulkan_core.h vulkan/vulkan.h vulkan/vulkan_directfb.h \
+    vulkan/vulkan_xcb.h vulkan/vulkan_wayland.h vulkan/vulkan_xlib.h vulkan/vulkan_mir.h \
+    vulkan/vulkan_screen.h vulkan/vulkan_fuchsia.h vulkan/vulkan_ggp.h vulkan/vulkan_macos.h \
+    vulkan/vulkan_vi.h vulkan/vulkan_win32.h vulkan/vulkan_enums.hpp \
+    vulkan/vulkan_extension_inspection.hpp vulkan/vulkan_format_traits.hpp vulkan/vulkan_funcs.hpp \
+    vulkan/vulkan_handles.hpp vulkan/vulkan_hash.hpp vulkan/vulkan_hpp_macros.hpp vulkan/vulkan_raii.hpp \
+    vulkan/vulkan_shared.hpp vulkan/vulkan_static_assertions.hpp vulkan/vulkan_structs.hpp \
+    vulkan/vulkan_to_string.hpp vulkan/vulkan_video.hpp \
+    vk_video/vulkan_video_codec_av1std.h vk_video/vulkan_video_codec_av1std_decode.h \
+    vk_video/vulkan_video_codec_h264std.h vk_video/vulkan_video_codec_h264std_decode.h \
+    vk_video/vulkan_video_codec_h265std.h vk_video/vulkan_video_codec_h265std_decode.h \
+    vk_video/vulkan_video_codec_h264std_encode.h vk_video/vulkan_video_codec_h264std_encode_read.h \
+    vk_video/vulkan_video_codec_h265std_encode.h vk_video/vulkan_video_codec_h265std_encode_read.h \
+    vk_video/vulkan_video_codec_gop_structure.h vk_video/vulkan_video_codec_gop_structure_read.h \
+    vk_video/vulkan_video_codec_av1std_encode.h vk_video/vulkan_video_codec_av1std_encode_read.h )
 fi
 
-for base in "${HPP_FILES[@]}"; do
-  url="https://raw.githubusercontent.com/KhronosGroup/Vulkan-Headers/$VK_TAG/include/vulkan/$base"
-  curl -fsSL "$url" -o "$VK_INC/$base" \
+for rel in "${HPP_FILES[@]}"; do
+  url="https://raw.githubusercontent.com/KhronosGroup/Vulkan-Headers/$VK_TAG/include/$rel"
+  dst="$VK_STAGE/$rel"
+  mkdir -p "$(dirname "$dst")"
+  curl -fsSL "$url" -o "$dst" \
     || { echo "Failed to download $url" >&2; exit 1; }
 done
 
 # --- Verify the staged pair is internally consistent (fail fast) ------------
 STAGED_HPP=$(grep -oE 'VK_HEADER_VERSION[[:space:]]*==[[:space:]]*[0-9]+' \
-             "$VK_INC/vulkan.hpp" | grep -oE '[0-9]+' | tail -1)
+             "$VK_STAGE/vulkan/vulkan.hpp" | grep -oE '[0-9]+' | tail -1)
 STAGED_CORE=$(grep -oE '#define[[:space:]]+VK_HEADER_VERSION[[:space:]]+[0-9]+' \
-              "$VK_INC/vulkan_core.h" | grep -oE '[0-9]+' | head -1)
+             "$VK_STAGE/vulkan/vulkan_core.h" | grep -oE '[0-9]+' | head -1)
 if [ "$STAGED_HPP" != "$STAGED_CORE" ]; then
   echo "ERROR: staged vulkan.hpp ($STAGED_HPP) and vulkan_core.h ($STAGED_CORE) disagree" >&2
   echo "ERROR: Vulkan build would fail with 'Wrong VK_HEADER_VERSION!'" >&2
   exit 1
 fi
-echo "Staged Vulkan headers -> $VK_INC (consistent at VK_HEADER_VERSION $STAGED_CORE)"
+echo "Staged Vulkan headers -> $VK_STAGE (consistent at VK_HEADER_VERSION $STAGED_CORE)"
 
 # --- Stage SPIRV-Headers (host) ----------------------------------------------
 # ggml-vulkan includes spirv/unified1/spirv.hpp directly (for the shader
