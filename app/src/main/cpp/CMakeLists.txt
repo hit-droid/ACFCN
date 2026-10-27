@@ -71,9 +71,20 @@ if(ACFCN_ENABLE_VULKAN)
     # The NDK toolchain re-roots find_package to the sysroot
     # (CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY), which hides the host-installed
     # SPIRV-Headers CMake config that ggml-vulkan needs. Let package lookups
-    # see the host too; Vulkan/OpenCL themselves still resolve inside the
-    # sysroot (the host has no Vulkan dev package).
+    # see the host too; SPIRV-Headers still resolves on the host below.
     set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE NEVER)
+    # Pin ggml-vulkan to the NDK sysroot's Vulkan headers. scripts/setup-vulkan-ndk.sh
+    # stages a version-consistent Vulkan-Headers set (vulkan.hpp + vulkan_core.h at
+    # the SAME VK_HEADER_VERSION) into the sysroot; resolving there — instead of the
+    # host libvulkan-dev copy that find_package would otherwise pick under
+    # CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=NEVER — keeps the pair consistent regardless
+    # of what the runner images ship. A runner refresh pushed libvulkan-dev's
+    # vulkan.hpp to 341 while the NDK's vulkan_core.h stayed at 275, which broke the
+    # whole build with "Wrong VK_HEADER_VERSION!"; forcing the sysroot include makes
+    # that impossible to recur. CMAKE_SYSROOT is provided by the NDK toolchain file.
+    if(DEFINED CMAKE_SYSROOT AND EXISTS "${CMAKE_SYSROOT}/usr/include/vulkan/vulkan.hpp")
+      set(Vulkan_INCLUDE_DIR "${CMAKE_SYSROOT}/usr/include" CACHE PATH "Vulkan headers (NDK sysroot, version-matched)" FORCE)
+    endif()
 endif()
 
 # Pinned to master @ 74bca3950054eed1795f525cb9cf06bfe796492d (2026-10-25),
