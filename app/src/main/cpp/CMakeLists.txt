@@ -87,6 +87,24 @@ if(ACFCN_ENABLE_VULKAN)
     endif()
 endif()
 
+# ARM KleidiAI GEMM kernels (CPU). This is the CPU-side lever that brings
+# llama.cpp's quantized matmul within reach of MNN's hand-tuned NEON GEMM on
+# Cortex-A — the remaining gap after q8_0 KV + CPU flash attention. Opt-in for
+# now: GGML_CPU_KLEIDIAI pulls the ARM-software/kleidiai release tarball at
+# configure time (needs an AArch64 target + CMake >= 3.16, both satisfied by the
+# NDK r27 toolchain) and must be validated against NDK on-device before we flip
+# it on by default. Enable with the ACFCN_KLEIDIAI environment variable, e.g.:
+#   ACFCN_KLEIDIAI=true ./gradlew :app:assembleDebug
+option(ACFCN_ENABLE_KLEIDIAI "Enable ARM KleidiAI CPU GEMM kernels" OFF)
+if(DEFINED ENV{ACFCN_KLEIDIAI} AND NOT "$ENV{ACFCN_KLEIDIAI}" STREQUAL "")
+    set(ACFCN_ENABLE_KLEIDIAI "$ENV{ACFCN_KLEIDIAI}" CACHE BOOL "Enable ARM KleidiAI CPU GEMM kernels" FORCE)
+endif()
+
+if(ACFCN_ENABLE_KLEIDIAI)
+    message(STATUS "ACFCN: ARM KleidiAI CPU GEMM kernels enabled")
+    set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
+endif()
+
 # Pinned to master @ 74bca3950054eed1795f525cb9cf06bfe796492d (2026-10-25),
 # 230 commits ahead of the previous b11640 (2026-10-15). Highlights for the
 # Adreno decode/prefill path (the "match MNN speed" line):
