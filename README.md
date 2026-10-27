@@ -92,6 +92,20 @@ adb shell setprop debug.acfcn.batch ""
 
 离线页「诊断日志」加载后会多一行 `prefill_batch: n_batch=... n_ubatch=...`，确认本次加载实际生效的 prefill 批处理规模与是否走了覆盖。
 
+### 端侧加速（KV 缓存量化 + Flash Attention，CPU/GPU 统一）
+
+解码是逐 token 的，**每生成一个 token 都要把整段 KV 缓存从头读一遍**，所以 KV 缓存的**带宽**是 decode 的瓶颈，KV 宽度决定每个 token 的成本。把 KV 缓存从 `f32` 量化到 `q8_0` 后宽度减到 1/4（ctx4096 的 4B 模型约 1.15GiB → 288MiB），叠加 Flash Attention 融合注意力，decode tok/s 明显提升。
+
+- **v2.30 起 CPU 路径与 GPU 路径统一**：此前 CPU-only 模式（大模型、或 GPU offload 失败回退）被硬编码成 `f16` KV + 关 Flash Attention「以求可移植」，等于把 CPU 用户留在慢路径上。现在 `debug.acfcn.kv` / `debug.acfcn.fa` 在 CPU 与 GPU 上**同样生效**，且 **CPU 默认也走 `q8_0` KV + Flash Attention**（与 GPU 默认一致）——llama.cpp 的 CPU 后端同样实现了量化 KV 的 Flash Attention，arm64 上正确。仅当 `kv=f16` 时（含 OpenCL 上 `f16` 触发 E031.41 编译器崩溃那条老路径）才关 FA，自动规避历史坑。
+- 构建失败（个别驱动编译不出量化 KV 的 FA 内核）会自动回退到 `f16` KV + 关 FA，**只会变慢、不会加载失败**。
+- 离线页诊断日志会打印 `flash attn ... kv cache ... on ...`，一眼确认本次加载走的是哪条 KV/FA 路径（CPU 会显示 `on cpu`）。
+
+```bash
+# CPU/GPU 通用调参（下次加载模型生效，无需重打包）
+adb shell setprop debug.acfcn.kv q8_0      # KV 缓存类型：q8_0(默认) | q4_0(更激进) | f16 | f32
+adb shell setprop debug.acfcn.fa off       # 关 Flash Attention（回退 f16 KV + 无 FA 的老安全路径）
+```
+
 本地从源码构建时，如需自行验证 OpenCL 路径：
 
 ```bash

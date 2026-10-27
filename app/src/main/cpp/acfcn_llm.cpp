@@ -90,6 +90,8 @@ static void llama_log_to_logcat(enum ggml_log_level level, const char *text, voi
 //   adb shell setprop debug.acfcn.batch 512     # override prefill/work batch (n_batch == n_ubatch)
 //   adb shell setprop debug.acfcn.cpu_affinity 0-3  # pin engine to big cores ("none" = off)
 //   adb shell setprop debug.acfcn.opencl_xmem 0    # disable Adreno xmem GEMM (default on)
+//   adb shell setprop debug.acfcn.kv q8_0          # KV cache type (q8_0|q4_0|f16|f32); now honored on CPU + GPU
+//   adb shell setprop debug.acfcn.fa off           # disable Flash Attention (CPU + GPU); f16 KV + FA off = old safe path
 // Property changes take effect on the next model load.
 static int get_property_int(const char *name, int fallback) {
     char value[PROP_VALUE_MAX] = {0};
@@ -835,12 +837,22 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
             else if (v == "f32")  ktype = GGML_TYPE_F32;
             else if (v == "q8_0") ktype = GGML_TYPE_Q8_0;
         }
-        // f16 KV cannot pair with FA on the OpenCL/Adreno driver (the E031.41
-        // compiler crash that started all this); Vulkan's FA has a native
-        // f16-KV variant, so only gate the OpenCL path.
-        const bool use_fa =
-            fa && mparams.n_gpu_layers != 0 &&
-            (ktype != GGML_TYPE_F16 || gpu_how != "opencl");
+        // KV cache quantization + Flash Attention, now unified across ALL
+        // backends (CPU included). Decode is KV-bandwidth bound and reads the
+        // whole KV cache every token, so q8_0 KV (4x narrower than f32) cuts
+        // per-token cost on the CPU path too — not just on the GPU. The
+        // llama.cpp CPU backend implements flash attention for quantized KV,
+        // so the same fused q8_0 + FA path the GPU uses is correct on arm64
+        // CPU as well; previously the CPU branch forced f16 + FA off "for
+        // portability", leaving CPU-only users (large models, or when GPU
+        // offload fails) on the slow path. FA is only ever paired with a
+        // quantized KV (never with f16), which automatically sidesteps the
+        // OpenCL/Adreno f16 FA compiler crash (E031.41) that started this
+        // work. debug.acfcn.kv / debug.acfcn.fa are now honored identically on
+        // CPU and GPU. Default ktype stays q8_0 (set above), matching the GPU
+        // default; debug.acfcn.kv=f32 / debug.acfcn.fa=off revert to the old
+        // behavior instantly.
+        const bool use_fa = fa && (ktype != GGML_TYPE_F16);
         auto make_ctx = [&](ggml_type kt, bool fa_on) -> llama_context * {
             cparams.type_k = kt;
             cparams.type_v = kt;
@@ -848,18 +860,11 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeInit(
                                             : LLAMA_FLASH_ATTN_TYPE_DISABLED;
             return llama_init_from_model(g_engine.model, cparams);
         };
-        if (mparams.n_gpu_layers == 0) {
-            // CPU-only path: unchanged f16 KV, no FA (portable across arm64).
+        g_engine.ctx = make_ctx(ktype, use_fa);
+        if (!g_engine.ctx) {
+            LOGI("ctx build failed with kv=%s + FA=%s; retrying f16 KV, FA off",
+                 ggml_type_name(ktype), use_fa ? "on" : "off");
             g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
-        } else if (use_fa) {
-            g_engine.ctx = make_ctx(ktype, true);
-            if (!g_engine.ctx) {
-                LOGI("ctx build failed with kv=%s + FA; retrying f16 KV, FA off",
-                     ggml_type_name(ktype));
-                g_engine.ctx = make_ctx(GGML_TYPE_F16, false);
-            }
-        } else {
-            g_engine.ctx = make_ctx(ktype, false);
         }
         LOGI("flash attn %s, kv cache %s on %s (n_gpu_layers=%d)",
              use_fa ? "enabled" : "disabled", ggml_type_name(cparams.type_k),
