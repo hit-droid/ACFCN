@@ -23,12 +23,16 @@ import com.selfmod.agent.store.SettingsStore
 import com.selfmod.agent.util.CrashStore
 import com.selfmod.agent.util.StorageStats
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import java.io.File
 
 /** A structured event pushed from agent/scripts/tools to the UI layer. */
@@ -152,6 +156,11 @@ class App : Application() {
         uiQueue?.offer(action, payload)
     }
 
+    // App-lifetime scope for the off-main-thread native library preload (see
+    // [initEngine]). Not cancelled on purpose — the dlopen is a one-shot
+    // warm-up that should always be allowed to finish.
+    private val engineLoadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         // The two pieces that only need `Context` are constructed first so they are
@@ -198,22 +207,39 @@ class App : Application() {
 
     private fun initEngine() {
         runFeature("engine") {
+            // The Kotlin singletons (LLM client, engine pair, format router) are
+            // cheap to construct and are needed synchronously here so initAgent()
+            // below can wire the agent. The expensive part — dlopen of
+            // libacfcn_llm.so / libacfcn_mnn.so (each ~12 MB) plus the JNI_OnLoad
+            // signal-handler install and log redirect — used to run on the main
+            // thread during onCreate. On memory-tight devices that can blow the
+            // cold-start ANR budget (v2.27 follow-up: "优先把 initEngine() 的
+            // dlopen 移出主线程"). It is now deferred to a background thread.
+            // ensureLoaded() is idempotent and LocalLlmEngine.load() calls it
+            // again before touching any JNI symbol, so a model load that wins the
+            // race simply performs the dlopen on its own (already-background)
+            // thread — behaviour and correctness are unchanged.
             _engine = LocalLlmEngine()
-            LocalLlmEngine.ensureLoaded()
-            // M14 — give the native signal handler the CrashStore directory so a
-            // SIGSEGV/SIGABRT/SIGBUS in llama.cpp still lands a report in the same
-            // file MainActivity checks on next launch.
-            runCatching { LocalLlmEngine.setNativeCrashDir(filesDir.absolutePath) }
-            // The MNN runtime is a second, independent .so set. Loading it is
-            // best-effort: if libacfcn_mnn.so is missing on a device, GGUF must
-            // keep working exactly as before.
-            runCatching { MnnLlmEngine.ensureLoaded() }
-                .onFailure { Log.w(TAG, "app_init mnn unavailable: ${it.message}") }
             _mnnEngine = MnnLlmEngine()
             _engines = OnDeviceEngines(_engine!!, _mnnEngine!!)
             // The client sees whichever engine holds a model; loadOnDevice keeps
             // both in step with the model's format.
             _llmClient = LlmClient(onDevice = FormatRoutingEngine(_engines!!))
+        }
+        if (_engine != null) {
+            engineLoadScope.launch {
+                // M14 — give the native signal handler the CrashStore directory so
+                // a SIGSEGV/SIGABRT/SIGBUS in llama.cpp still lands a report in the
+                // same file MainActivity checks on next launch.
+                runCatching { LocalLlmEngine.ensureLoaded() }
+                    .onFailure { Log.w(TAG, "app_init llama lib load failed: ${it.message}") }
+                runCatching { LocalLlmEngine.setNativeCrashDir(filesDir.absolutePath) }
+                // The MNN runtime is a second, independent .so set. Loading it is
+                // best-effort: if libacfcn_mnn.so is missing on a device, GGUF must
+                // keep working exactly as before.
+                runCatching { MnnLlmEngine.ensureLoaded() }
+                    .onFailure { Log.w(TAG, "app_init mnn unavailable: ${it.message}") }
+            }
         }
     }
 
