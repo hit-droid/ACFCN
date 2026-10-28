@@ -92,13 +92,13 @@ adb shell setprop debug.acfcn.kv q4_0
 
 离线页「诊断日志」加载后会显示 `flash attn enabled, kv cache q8_0 on cpu`（或回退的 `f16`），确认本次生效。
 
-### 端侧加速（可选：ARM KleidiAI CPU GEMM）
+### 端侧加速（ARM KleidiAI CPU GEMM，默认开启）
 
-LLM 解码的主成本是按 token 读取权重做矩阵乘。llama.cpp 的 ARM NEON GEMM 已经不错，但要**真正比肩 MNN 的手调 NEON GEMM**，可开启 ARM 官方的 [KleidiAI](https://github.com/ARM-software/kleidiai) 内核（Cortex-A 专用优化）。它在 CMake 配置阶段从 ARM-software/kleidiai 拉取发布包，目前**默认关闭**——需要 NDK 工具链真机验证后再默认开启：
+LLM 解码的主成本是按 token 读取权重做矩阵乘。llama.cpp 的 ARM NEON GEMM 已经不错，但要**真正比肩 MNN 的手调 NEON GEMM**，引擎默认启用 ARM 官方的 [KleidiAI](https://github.com/ARM-software/kleidiai) 内核（Cortex-A 专用优化，在 CMake 配置阶段从 ARM-software/kleidiai 拉取发布包并编译进 `.so`）。这是继 q8_0 KV + CPU FlashAttention 之后，CPU 解码路径对齐 MNN 的**最后一个杠杆**——CI（每次 push/PR）与发布构建都会以 `ACFCN_KLEIDIAI=true` 真机构建并验证该内核：
 
 ```bash
-# 构建时开启 KleidiAI GEMM（默认关）
-ACFCN_KLEIDIAI=true ./gradlew :app:assembleDebug
+# 默认即开启；如需关闭（如本地构建想跳过 FetchContent 拉包），显式关掉：
+ACFCN_KLEIDIAI=false ./gradlew :app:assembleDebug
 ```
 
 App 离线页「诊断日志」在加载后会显示：本构建是否支持 GPU offload、请求的 GPU 层数、CPU 指令集（确认 dotprod 已启用）、以及 llama.cpp 打印的 OpenCL 设备与实际放置到 GPU 的层数；生成后还会显示首 token、总耗时与解码 tok/s。以上均无需 adb。详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：

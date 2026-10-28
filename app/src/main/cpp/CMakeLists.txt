@@ -89,13 +89,15 @@ endif()
 
 # ARM KleidiAI GEMM kernels (CPU). This is the CPU-side lever that brings
 # llama.cpp's quantized matmul within reach of MNN's hand-tuned NEON GEMM on
-# Cortex-A — the remaining gap after q8_0 KV + CPU flash attention. Opt-in for
-# now: GGML_CPU_KLEIDIAI pulls the ARM-software/kleidiai release tarball at
+# Cortex-A — the remaining gap after q8_0 KV + CPU flash attention. Enabled by
+# default: GGML_CPU_KLEIDIAI pulls the ARM-software/kleidiai release tarball at
 # configure time (needs an AArch64 target + CMake >= 3.16, both satisfied by the
-# NDK r27 toolchain) and must be validated against NDK on-device before we flip
-# it on by default. Enable with the ACFCN_KLEIDIAI environment variable, e.g.:
-#   ACFCN_KLEIDIAI=true ./gradlew :app:assembleDebug
-option(ACFCN_ENABLE_KLEIDIAI "Enable ARM KleidiAI CPU GEMM kernels" OFF)
+# NDK r27 toolchain) and is built + validated in CI (ACFCN_KLEIDIAI=true) on
+# every push/PR and in release builds. Opt out of the default-on behavior with
+# ACFCN_KLEIDIAI=false (e.g. for a local build that should skip the FetchContent
+# pull), or force it back on with ACFCN_KLEIDIAI=true:
+#   ACFCN_KLEIDIAI=false ./gradlew :app:assembleDebug
+option(ACFCN_ENABLE_KLEIDIAI "Enable ARM KleidiAI CPU GEMM kernels" ON)
 if(DEFINED ENV{ACFCN_KLEIDIAI} AND NOT "$ENV{ACFCN_KLEIDIAI}" STREQUAL "")
     set(ACFCN_ENABLE_KLEIDIAI "$ENV{ACFCN_KLEIDIAI}" CACHE BOOL "Enable ARM KleidiAI CPU GEMM kernels" FORCE)
 endif()

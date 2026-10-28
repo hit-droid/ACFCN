@@ -17,6 +17,9 @@ jobs:
       ACFCN_OPENCL: "true"
       # Ship the Vulkan backend (preferred at runtime on Adreno).
       ACFCN_VULKAN: "true"
+      # Ship ARM KleidiAI CPU GEMM (default-on CPU matmul, closes the gap to
+      # MNN's hand-tuned NEON).
+      ACFCN_KLEIDIAI: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -20,6 +20,9 @@ jobs:
       # Build the Vulkan backend too (preferred at runtime on Adreno). Needs
       # the host glslc + SPIRV-Headers staged below for shader compilation.
       ACFCN_VULKAN: "true"
+      # Build ARM KleidiAI CPU GEMM and validate the default-on CPU matmul that
+      # closes the remaining gap to MNN's hand-tuned NEON on every push.
+      ACFCN_KLEIDIAI: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
