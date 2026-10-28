@@ -80,6 +80,10 @@ adb shell setprop debug.acfcn.warmup 0
 
 若某设备无法为 `q8_0` 构建 CPU KV 缓冲，引擎自动回退到 f16 KV，因此内核/容量问题只会损失速度、不会加载失败。离线页「诊断日志」加载后会显示 `kv cache Q8_0 on cpu`（或回退的 `F16`），确认本次生效。
 
+### 端侧加速（冷启动原生库预加载移出主线程）
+
+`libacfcn_llm.so` / `libacfcn_mnn.so`（各约 12 MB）的 `dlopen` 与 `JNI_OnLoad` 内的信号处理安装、日志重定向，原来在 `App.onCreate` 的**主线程**同步完成。在内存紧张的机器上这会吃掉冷启动 ANR 预算，表现为应用启动卡顿甚至被系统杀掉。v2.31 起这段重活改到后台线程：Kotlin 单例（LLM 客户端、双引擎、路由）仍同步构造以保证智能体装配，原生库加载则异步预热。`ensureLoaded()` 本身是幂等的，模型加载路径（`LocalLlmEngine.load`）在触碰任何 JNI 符号前还会再调一次，所以即使首次加载抢在预热之前完成，也只是在它自己的（本就后台的）线程上补做一次 `dlopen`——行为与正确性不变。该优化无需任何开关，也无法用 `debug.acfcn.*` 关闭（属启动路径，不是推理调参）。
+
 App 离线页「诊断日志」在加载后会显示：本构建是否支持 GPU offload、请求的 GPU 层数、CPU 指令集（确认 dotprod 已启用）、以及 llama.cpp 打印的 OpenCL 设备与实际放置到 GPU 的层数；生成后还会显示首 token、总耗时与解码 tok/s。以上均无需 adb。详细日志（含 llama.cpp/ggml/OpenCL 后端输出）：
 
 ```bash
