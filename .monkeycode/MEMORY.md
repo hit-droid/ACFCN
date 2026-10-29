@@ -70,3 +70,13 @@ This file records user instructions, preferences, and teachings for reference in
   - 沙箱坑：github.com:443 直连不稳，匿名 `git clone` 与带 token clone 均超时；FetchContent 走原生 git 不带 token，且沙箱对 github.com 连接常中断 → CMake configure 卡在 FetchContent 几十分钟直至失败（表现为构建长时间无输出后报错）。
   - 本地镜像解法（稳定）：① `curl -L https://codeload.github.com/ggml-org/llama.cpp/tarball/b11179 -o /tmp/llama.tar.gz`（约 37MB，codeload 比 git clone 稳得多）；② 解压 `mkdir -p /tmp/llama-cpp && tar -xzf /tmp/llama.tar.gz -C /tmp/llama-cpp --strip-components=1`；③ 在 /tmp/llama-cpp 内 `git init && git add -A && git commit -m init && git tag b11179`（codeload tarball 不含 .git，必须手动打 tag 才能命中 GIT_TAG）；④ `git config --global url."file:///tmp/llama-cpp/".insteadOf "https://github.com/ggml-org/llama.cpp.git"`；⑤ 清 `app/.cxx` 缓存后重新构建，CMake 走本地镜像不再联网。
   - 该 `insteadOf` 是**全局** git 配置，仅沙箱本地需要，**切勿提交到仓库**；换机器或重搭环境需重新执行上述步骤。
+
+[Project Knowledge Summary]
+- Date: 2026-10-29
+- Context: Discovered while rebasing onto main after the llama.cpp pin moved from b11640 to a master SHA (74bca395, v2.30)
+- Category: Build Methods / Environment Configuration
+- Instructions:
+  - llama.cpp 的 pin 现在是 SHA（`GIT_TAG 74bca395...` + `GIT_SHALLOW TRUE`），不再是 tag 名。CMake 的 gitclone 脚本是 `clone --depth 1 --no-single-branch` 再 `checkout <SHA>`，所以本地镜像 `/tmp/llama-cpp` 里该 SHA **必须作为某个分支的 tip** 存在，否则报 `fatal: reference is not a tree` / `Failed to checkout tag`。
+  - pin 变更后的修法：`cd /tmp/llama-cpp && GIT_CONFIG_GLOBAL=/dev/null git fetch --depth 1 https://github.com/ggml-org/llama.cpp.git <SHA>:refs/heads/pin-<短SHA>`（`GIT_CONFIG_GLOBAL=/dev/null` 用来临时绕过全局 `insteadOf` 重写，直连 github 可用）。
+  - 拉完把旧的 `app/.cxx/Debug/*/arm64-v8a/_deps/llama-src` 移走（clone 目标目录非空会失败），再重新构建；换了 pin 后 C++ 全量重编，本地约 10 分钟。
+  - main 的 `f51bf75`（v2.30）修了 Vulkan 头版本错配：CMake 现在把 `Vulkan_INCLUDE_DIR` 强制指向 NDK sysroot，前提是 `scripts/setup-vulkan-ndk.sh` 已把配套 vulkan.hpp/vulkan_core.h 铺进去。CI 与 release 都会先跑该脚本，本地若报 `Wrong VK_HEADER_VERSION!` 先补跑它。
