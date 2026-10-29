@@ -27,6 +27,13 @@ class LlmClient(
     private val inFlight = AtomicReference<Call?>(null)
     private val httpAbort = AtomicBoolean(false)
 
+    // Incremental prompt-fold cache for the on-device agent loop (see
+    // OnDevicePrompts.foldCached). Keyed by the history list instance + a
+    // sentinel, so a different conversation (or a cleared/refilled history) is
+    // transparently invalidated. Saves re-folding the whole history on every
+    // agent step — work that would otherwise compete for CPU with decode.
+    private var foldCache: OnDevicePrompts.Cache? = null
+
     fun cancel() {
         httpAbort.set(true)
         onDevice?.cancel()
@@ -76,7 +83,8 @@ class LlmClient(
         val engine = onDevice ?: throw LlmException(503, "端侧推理引擎不可用")
         if (cancelled()) throw LlmException(499, "cancelled")
         if (!engine.isLoaded()) throw LlmException(503, "端侧模型未加载，请在离线页加载模型")
-        val folded = OnDevicePrompts.fold(messages)
+        val (folded, newCache) = OnDevicePrompts.foldCached(messages, foldCache)
+        foldCache = newCache
         val budget = ContextBudget.promptBudget(engine.contextSize(), config.maxTokens)
         val pairs = ContextBudget.trim(folded, budget)
         if (pairs.size < folded.size) {
