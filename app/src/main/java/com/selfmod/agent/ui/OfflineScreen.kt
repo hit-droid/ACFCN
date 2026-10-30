@@ -3,16 +3,17 @@ package com.selfmod.agent.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -39,6 +41,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.selfmod.agent.offline.LocalModel
@@ -50,6 +53,7 @@ import com.selfmod.agent.ui.theme.Danger
 import com.selfmod.agent.ui.theme.SurfaceVariant
 import com.selfmod.agent.ui.theme.TextPrimary
 import com.selfmod.agent.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
 
 /**
  * Offline tab.
@@ -58,6 +62,9 @@ import com.selfmod.agent.ui.theme.TextSecondary
  * state first (offline switch, engine, endpoint), then the primary action
  * (load a local model), then the secondary path (external service on the LAN),
  * then reference material (recommended models, usage, diagnostics) collapsed.
+ *
+ * Spacing is two-level: 24dp between sections, 8dp between the cards inside a
+ * section. A single uniform gap made sibling model cards look unrelated.
  */
 @Composable
 fun OfflineScreen(vm: AgentViewModel) {
@@ -72,15 +79,29 @@ fun OfflineScreen(vm: AgentViewModel) {
     val engineBusy by vm.engineBusy.collectAsState()
     val engineReady by vm.engineReady.collectAsState()
     val engineProgress by vm.engineProgress.collectAsState()
+    val loadedModelId by vm.loadedModelId.collectAsState()
     val selfTest by vm.selfTest.collectAsState()
     val selfTesting by vm.selfTesting.collectAsState()
     val diagnostics by vm.diagnostics.collectAsState()
     val cfg = vm.config()
     var note by remember { mutableStateOf<String?>(null) }
+    var pendingId by remember { mutableStateOf<String?>(null) }
     var showRecommended by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showUsage by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+
+    // Feedback lives at the top of the page: the actions that produce it sit in
+    // the first two sections, so a banner at the bottom was never on screen.
+    LaunchedEffect(note) {
+        if (note != null) {
+            delay(4000)
+            note = null
+        }
+    }
+    LaunchedEffect(engineBusy) {
+        if (!engineBusy) pendingId = null
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
@@ -92,231 +113,275 @@ fun OfflineScreen(vm: AgentViewModel) {
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("离线", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "离线",
+                color = TextPrimary,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
             Caption("本机模型、局域网推理服务与端侧引擎")
         }
 
         // ---- 状态 ----------------------------------------------------------
-        InfoCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("离线模式", color = TextPrimary, fontSize = 14.sp)
-                    Caption("优先走本机端点，提示词切到 ReAct 工具格式")
+        Section {
+            InfoCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("离线模式", color = TextPrimary, fontSize = 14.sp)
+                        Caption("优先走本机端点，提示词切到 ReAct 工具格式")
+                    }
+                    Switch(checked = offline, onCheckedChange = { vm.setOfflineMode(it) })
                 }
-                Switch(checked = offline, onCheckedChange = { vm.setOfflineMode(it) })
-            }
 
-            ThinDivider(Modifier.padding(vertical = 4.dp))
+                ThinDivider(Modifier.padding(vertical = 4.dp))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(8.dp).background(
-                        if (engineReady) AccentGreen else TextSecondary,
-                        CircleShape,
-                    ),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    if (engineReady) "端侧模型已加载" else "端侧模型未加载",
-                    color = if (engineReady) AccentGreen else TextSecondary,
-                    fontSize = 13.sp,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { vm.runEngineSelfTest() }, enabled = engineReady && !selfTesting) {
-                    Text(if (selfTesting) "自检中" else "自检", fontSize = 12.sp)
-                }
-                TextButton(onClick = { vm.unloadOnDevice() }, enabled = engineReady && !engineBusy) {
-                    Text("卸载", fontSize = 12.sp)
-                }
-            }
-
-            if (engineStatus.isNotBlank()) {
-                Caption(engineStatus, color = if (engineReady) AccentGreen else AccentAmber)
-            }
-            if (engineProgress >= 0f) {
-                LinearProgressIndicator(
-                    progress = { engineProgress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = AccentBlue,
-                )
-            }
-
-            ThinDivider(Modifier.padding(vertical = 4.dp))
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Caption("当前端点", color = AccentBlue)
-                    Text(
-                        cfg.profileName.ifBlank { cfg.kind },
-                        color = TextPrimary,
-                        fontSize = 14.sp,
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(8.dp).background(
+                            if (engineReady) AccentGreen else TextSecondary,
+                            CircleShape,
+                        ),
                     )
-                    Caption("${cfg.baseUrl} · ${cfg.model}")
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (engineReady) "端侧模型已加载" else "端侧模型未加载",
+                        color = if (engineReady) AccentGreen else TextSecondary,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (engineReady) {
+                        TextButton(onClick = { vm.runEngineSelfTest() }, enabled = !selfTesting) {
+                            Text(if (selfTesting) "自检中" else "自检", fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { vm.unloadOnDevice() }, enabled = !engineBusy) {
+                            Text("卸载", fontSize = 12.sp)
+                        }
+                    }
                 }
-                Text(
-                    if (cfg.isLocalHost()) "本机" else "云端",
-                    color = if (cfg.isLocalHost()) AccentGreen else AccentAmber,
-                    fontSize = 12.sp,
-                )
+
+                if (engineStatus.isNotBlank()) {
+                    // The row above already says whether the engine is loaded;
+                    // drop the prefix so the detail line carries name/ctx only.
+                    Caption(
+                        if (engineReady) engineStatus.replace("已加载：", "") else engineStatus,
+                        color = if (engineReady) AccentGreen else AccentAmber,
+                    )
+                }
+                if (engineProgress >= 0f) {
+                    LinearProgressIndicator(
+                        progress = { engineProgress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = AccentBlue,
+                    )
+                }
+
+                ThinDivider(Modifier.padding(vertical = 4.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Caption("当前端点", color = AccentBlue)
+                        Text(
+                            cfg.profileName.ifBlank { cfg.kind },
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                        )
+                        Caption("${cfg.baseUrl} · ${cfg.model}")
+                    }
+                    Text(
+                        if (cfg.isLocalHost()) "本机" else "云端",
+                        color = if (cfg.isLocalHost()) AccentGreen else AccentAmber,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+
+            note?.let { msg ->
+                InfoCard {
+                    Text(msg, color = AccentBlue, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+            }
+
+            if (selfTest.isNotBlank()) {
+                InfoCard {
+                    Text("自检结果", color = AccentBlue, fontSize = 12.sp)
+                    Text(
+                        selfTest,
+                        color = TextPrimary,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
         }
 
         // ---- 已导入模型（主操作）-------------------------------------------
-        SectionHeader("已导入模型") {
-            TextButton(onClick = { picker.launch(arrayOf("*/*")) }) {
-                Text("导入", fontSize = 12.sp)
+        Section {
+            SectionHeader("已导入模型") {
+                TextButton(onClick = { picker.launch(arrayOf("*/*")) }) {
+                    Text("导入", fontSize = 12.sp)
+                }
             }
-        }
-        if (models.isEmpty()) {
-            Caption("还没有模型。点右上角「导入」，选择手机里的 .gguf 文件或 MNN 模型 zip。")
-        } else {
-            models.forEach { m: LocalModel ->
-                ModelRow(
-                    model = m,
-                    busy = engineBusy,
-                    onLoad = { vm.loadOnDevice(m) },
-                    onUseAsService = {
-                        vm.applyOfflineModel(m)
-                        note = "已把模型名设为 ${m.name}，请确认本机服务已加载该文件"
-                    },
-                    onRemove = { vm.removeModel(m.id) },
-                )
-            }
-        }
-
-        if (selfTest.isNotBlank()) {
-            InfoCard {
-                Text("自检结果", color = AccentBlue, fontSize = 12.sp)
-                Text(
-                    selfTest,
-                    color = TextPrimary,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                    fontFamily = FontFamily.Monospace,
-                )
+            if (models.isEmpty()) {
+                InfoCard {
+                    Caption("还没有模型。选手机里的 .gguf 文件，或 MNN 模型 zip。")
+                    Button(onClick = { picker.launch(arrayOf("*/*")) }) {
+                        Text("选择模型文件", fontSize = 13.sp)
+                    }
+                }
+            } else {
+                models.forEach { m: LocalModel ->
+                    ModelRow(
+                        model = m,
+                        loaded = m.id == loadedModelId,
+                        loading = engineBusy && pendingId == m.id,
+                        busy = engineBusy,
+                        onLoad = {
+                            if (!engineBusy) {
+                                pendingId = m.id
+                                vm.loadOnDevice(m)
+                            }
+                        },
+                        onUseAsService = {
+                            vm.applyOfflineModel(m)
+                            note = "已把模型名设为 ${m.name}，请确认本机服务已加载该文件"
+                        },
+                        onRemove = { vm.removeModel(m.id) },
+                    )
+                }
             }
         }
 
         // ---- 局域网推理服务 ------------------------------------------------
-        SectionHeader("局域网推理服务")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { vm.probeLocal() }, enabled = !probing) {
-                Text(if (probing) "扫描中…" else "扫描端口", fontSize = 13.sp)
-            }
-            OutlinedButton(onClick = { vm.testConnection() }, enabled = !testing) {
-                Text(if (testing) "测试中…" else "测试端点", fontSize = 13.sp)
-            }
-        }
-        Caption("Ollama 11434 · LM Studio 1234 · llama.cpp 8080 · Jan 1337")
-
-        probe.forEach { hit ->
-            InfoCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(hit.name, color = TextPrimary, fontSize = 13.sp)
-                        Caption("${hit.baseUrl} · ${hit.latencyMs}ms")
-                        if (hit.models.isNotEmpty()) {
-                            Caption(hit.models.take(4).joinToString(), color = AccentGreen)
-                        }
-                    }
-                    OutlinedButton(onClick = {
-                        vm.applyLocalEndpoint(hit.name, hit.baseUrl, hit.models.firstOrNull().orEmpty())
-                        note = "已切换到 ${hit.name}"
-                    }) { Text("接入", fontSize = 12.sp) }
+        Section {
+            SectionHeader("局域网推理服务")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { vm.probeLocal() }, enabled = !probing) {
+                    Text(if (probing) "扫描中…" else "扫描端口", fontSize = 13.sp)
+                }
+                OutlinedButton(onClick = { vm.testConnection() }, enabled = !testing) {
+                    Text(if (testing) "测试中…" else "测试端点", fontSize = 13.sp)
                 }
             }
-        }
-        if (probe.isEmpty() && !probing) {
-            Caption("尚未扫描，或本机没有监听的推理服务。")
-        }
-        test?.let { r ->
-            Text(
-                r.message + if (r.sample.isNotBlank()) " · 回复：${r.sample.take(80)}" else "",
-                color = if (r.ok) AccentGreen else Danger,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-            )
+            Caption("Ollama 11434 · LM Studio 1234 · llama.cpp 8080 · Jan 1337")
+
+            probe.forEach { hit ->
+                InfoCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(hit.name, color = TextPrimary, fontSize = 13.sp)
+                            Caption("${hit.baseUrl} · ${hit.latencyMs}ms")
+                            if (hit.models.isNotEmpty()) {
+                                Caption(
+                                    hit.models.take(4).joinToString(),
+                                    color = AccentGreen,
+                                    maxLines = 2,
+                                )
+                            }
+                        }
+                        OutlinedButton(onClick = {
+                            vm.applyLocalEndpoint(hit.name, hit.baseUrl, hit.models.firstOrNull().orEmpty())
+                            note = "已切换到 ${hit.name}"
+                        }) { Text("接入", fontSize = 12.sp) }
+                    }
+                }
+            }
+            if (probe.isEmpty() && !probing) {
+                Caption("尚未扫描，或本机没有监听的推理服务。")
+            }
+            test?.let { r ->
+                Text(
+                    r.message + if (r.sample.isNotBlank()) " · 回复：${r.sample.take(80)}" else "",
+                    color = if (r.ok) AccentGreen else Danger,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                )
+            }
         }
 
         // ---- 推荐模型（默认折叠）-------------------------------------------
-        SectionHeader("推荐模型") {
-            TextButton(onClick = { showRecommended = !showRecommended }) {
-                Text(if (showRecommended) "收起" else "${RecommendedModels.ALL.size} 个", fontSize = 12.sp)
+        Section {
+            SectionHeader("推荐模型") {
+                TextButton(onClick = { showRecommended = !showRecommended }) {
+                    Text(if (showRecommended) "收起" else "展开", fontSize = 12.sp)
+                }
             }
-        }
-        if (showRecommended) {
-            Caption("先下载 .gguf 到手机，再回到上面「导入」。建议从 1.5B / Q4_K_M 起步。")
-            RecommendedModels.ALL.forEach { rec ->
-                InfoCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            rec.name,
-                            color = TextPrimary,
-                            fontSize = 13.sp,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Caption("${rec.quant} · ${rec.sizeLabel}", color = AccentBlue)
+            if (showRecommended) {
+                Caption("先下载 .gguf 到手机，再回到上面「导入」。建议从 1.5B / Q4_K_M 起步。")
+                RecommendedModels.ALL.forEach { rec ->
+                    InfoCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                rec.name,
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Caption("${rec.quant} · ${rec.sizeLabel}", color = AccentBlue)
+                        }
+                        Caption("${rec.ramHint} · ${rec.note}")
+                        TextButton(
+                            onClick = { vm.openInBrowser(rec.url) },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                        ) { Text("打开下载页", fontSize = 12.sp) }
                     }
-                    Caption("${rec.ramHint} · ${rec.note}")
-                    TextButton(
-                        onClick = { vm.openInBrowser(rec.url) },
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                    ) { Text("打开下载页", fontSize = 12.sp) }
                 }
             }
         }
 
         // ---- 诊断日志（默认折叠）-------------------------------------------
-        SectionHeader("诊断日志") {
-            TextButton(onClick = { showDiagnostics = !showDiagnostics }) {
-                Text(if (showDiagnostics) "收起" else "查看", fontSize = 12.sp)
-            }
-        }
-        if (showDiagnostics) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = { clipboard.setText(AnnotatedString(diagnostics)) }) {
-                    Text("复制全部", fontSize = 12.sp)
-                }
-                TextButton(onClick = { vm.refreshDiagnostics() }) {
-                    Text("刷新", fontSize = 12.sp)
-                }
-                TextButton(onClick = { vm.clearDiagnostics() }) {
-                    Text("清空", fontSize = 12.sp)
+        Section {
+            SectionHeader("诊断日志") {
+                TextButton(onClick = { showDiagnostics = !showDiagnostics }) {
+                    Text(if (showDiagnostics) "收起" else "展开", fontSize = 12.sp)
                 }
             }
-            if (diagnostics.isNotBlank() && diagnostics != "（暂无日志）") {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .background(SurfaceVariant, RoundedCornerShape(12.dp))
-                        .verticalScroll(rememberScrollState())
-                        .padding(12.dp),
-                ) {
-                    Text(
-                        diagnostics,
-                        color = TextPrimary,
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
+            if (showDiagnostics) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(diagnostics)) }) {
+                        Text("复制全部", fontSize = 12.sp)
+                    }
+                    TextButton(onClick = { vm.refreshDiagnostics() }) {
+                        Text("刷新", fontSize = 12.sp)
+                    }
+                    TextButton(onClick = { vm.clearDiagnostics() }) {
+                        Text("清空", fontSize = 12.sp)
+                    }
                 }
-            } else {
-                Caption("还没有日志。加载模型后点「刷新」，把这里的内容复制出来即可定位问题。")
+                if (diagnostics.isNotBlank() && diagnostics != "（暂无日志）") {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .background(SurfaceVariant, RoundedCornerShape(12.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp),
+                    ) {
+                        Text(
+                            diagnostics,
+                            color = TextPrimary,
+                            fontSize = 10.sp,
+                            lineHeight = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                } else {
+                    Caption("还没有日志。加载模型后点「刷新」，把这里的内容复制出来即可定位问题。")
+                }
             }
         }
 
         // ---- 用法（默认折叠）-----------------------------------------------
-        SectionHeader("怎么用") {
-            TextButton(onClick = { showUsage = !showUsage }) {
-                Text(if (showUsage) "收起" else "展开", fontSize = 12.sp)
+        Section {
+            SectionHeader("怎么用") {
+                TextButton(onClick = { showUsage = !showUsage }) {
+                    Text(if (showUsage) "收起" else "展开", fontSize = 12.sp)
+                }
             }
-        }
-        AnimatedVisibility(visible = showUsage) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (showUsage) {
                 UsageLine("1", "导入模型", "把 .gguf 或 MNN zip 放到手机，点「导入」选择文件。")
                 UsageLine("2", "加载到本机", "点模型卡片里的「加载」，等进度条走完，状态变成已加载。")
                 UsageLine("3", "直接对话", "回到「智能体」页提问，推理全部在本机完成，断网可用。")
@@ -324,26 +389,45 @@ fun OfflineScreen(vm: AgentViewModel) {
             }
         }
 
-        note?.let { msg ->
-            InfoCard {
-                Text(msg, color = AccentGreen, fontSize = 12.sp, lineHeight = 16.sp)
-            }
-        }
-
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(8.dp))
     }
+}
+
+@Composable
+private fun Section(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
 }
 
 @Composable
 private fun ModelRow(
     model: LocalModel,
+    loaded: Boolean,
+    loading: Boolean,
     busy: Boolean,
     onLoad: () -> Unit,
     onUseAsService: () -> Unit,
     onRemove: () -> Unit,
 ) {
     InfoCard {
-        Text(model.name, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                model.name,
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (loaded) {
+                Spacer(Modifier.width(8.dp))
+                Text("已加载", color = AccentGreen, fontSize = 11.sp)
+            }
+        }
         Caption("${model.format.uppercase()} · ${model.sizeLabel()}")
         if (model.summary.isNotBlank()) {
             Caption(model.summary, color = AccentBlue)
@@ -353,12 +437,19 @@ private fun ModelRow(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Button(onClick = onLoad, enabled = !busy) {
-                Text(if (busy) "加载中…" else "加载", fontSize = 13.sp)
+                Text(
+                    when {
+                        loading -> "加载中…"
+                        loaded -> "重新加载"
+                        else -> "加载"
+                    },
+                    fontSize = 13.sp,
+                )
             }
             TextButton(onClick = onUseAsService) {
                 Text("设为服务模型", fontSize = 12.sp)
             }
-            TextButton(onClick = onRemove) {
+            TextButton(onClick = onRemove, enabled = !busy) {
                 Text("移除", fontSize = 12.sp, color = Danger)
             }
         }
