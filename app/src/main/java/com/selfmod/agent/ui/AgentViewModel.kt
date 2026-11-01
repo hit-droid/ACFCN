@@ -544,6 +544,10 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     /** 0..1 while copying/loading, -1 when idle. */
     val engineProgress: StateFlow<Float> = _engineProgress.asStateFlow()
 
+    private val _loadedModelId = MutableStateFlow<String?>(null)
+    /** id of the model currently resident in the on-device engine, null when none. */
+    val loadedModelId: StateFlow<String?> = _loadedModelId.asStateFlow()
+
     // M13: check-then-act on the StateFlow let double-taps race past the guard;
     // the CAS makes "one load at a time" atomic at the UI entry too.
     private val engineBusyGate = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -571,6 +575,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 app.engines.unloadAll()
                 _engineReady.value = false
+                _loadedModelId.value = null
 
                 // Pre-flight checks. IMPORTANT: llama.cpp uses *native* memory (mmap),
                 // so the Java heap limit is irrelevant. We check real system RAM and
@@ -659,6 +664,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 _engineProgress.value = -1f
                 if (ok) {
                     _engineReady.value = true
+                    _loadedModelId.value = m.id
                     _engineStatus.value = warn + "已加载：${m.name}（ctx $ctx）"
                     val cfg = app.settings.llmConfig().copy(
                         kind = LlmConfig.KIND_ONDEVICE,
@@ -703,6 +709,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             app.engines.unloadAll()
             _engineReady.value = false
+            _loadedModelId.value = null
             _engineStatus.value = "已卸载端侧模型"
         }
     }
@@ -769,6 +776,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 val freed = app.storage.clearModelCopies()
                 app.engines.unloadAll()
                 _engineReady.value = false
+                _loadedModelId.value = null
                 _engineStatus.value = ModelCopyWipe.AFTER_ENGINE
                 _engineProgress.value = -1f
                 _storageMsg.value = ModelCopyWipe.message(freed, copied)
