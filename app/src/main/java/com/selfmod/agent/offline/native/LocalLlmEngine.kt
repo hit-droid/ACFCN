@@ -122,6 +122,10 @@ class LocalLlmEngine : OnDeviceEngine {
         temperature: Float,
         topK: Int,
         topP: Float,
+        seed: Long,
+        repeatPenalty: Float,
+        presencePenalty: Float,
+        frequencyPenalty: Float,
         onToken: OnDeviceEngine.TokenCallback?,
     ): Int = chatWithTimeout(
         messages = messages,
@@ -129,6 +133,10 @@ class LocalLlmEngine : OnDeviceEngine {
         temperature = temperature,
         topK = topK,
         topP = topP,
+        seed = seed,
+        repeatPenalty = repeatPenalty,
+        presencePenalty = presencePenalty,
+        frequencyPenalty = frequencyPenalty,
         onToken = onToken,
         timeoutMs = 120_000,
     )
@@ -144,6 +152,10 @@ class LocalLlmEngine : OnDeviceEngine {
         temperature: Float = 0.7f,
         topK: Int = 40,
         topP: Float = 0.95f,
+        seed: Long = -1L,
+        repeatPenalty: Float = 1.0f,
+        presencePenalty: Float = 0.0f,
+        frequencyPenalty: Float = 0.0f,
         onToken: OnDeviceEngine.TokenCallback? = null,
         timeoutMs: Long = 120_000,
     ): Int {
@@ -182,7 +194,10 @@ class LocalLlmEngine : OnDeviceEngine {
             }
         }
         val code = IdleWatchdog.run(timeoutMs, lastTokenAt, aborted, { nativeCancel() }) {
-            nativeChat(tmpl, useRoles, useContents, maxTokens, temperature, topK, topP, wrapped)
+            nativeChat(
+                tmpl, useRoles, useContents, maxTokens, temperature, topK, topP,
+                seed, repeatPenalty, presencePenalty, frequencyPenalty, wrapped,
+            )
         }
         val totalMs = System.currentTimeMillis() - t0
         val n = emitted.get()
@@ -246,6 +261,7 @@ class LocalLlmEngine : OnDeviceEngine {
     private external fun nativeChat(
         template: String, roles: Array<String>, contents: Array<String>,
         maxTokens: Int, temperature: Float, topK: Int, topP: Float,
+        seed: Long, repeatPenalty: Float, presencePenalty: Float, frequencyPenalty: Float,
         callback: OnDeviceEngine.TokenCallback?,
     ): Int
     private external fun nativeChatTemplate(): String

@@ -60,7 +60,7 @@
 
 ### 中严重度
 - [x] M1 `nativeGenerate()` 死代码 — **已删除**（`chore/remove-native-generate`；Kotlin `generate()` 无调用者，连同 JNI export 一并移除）
-- [ ] M2 采样参数不支持 seed/repeat/presence/frequency penalty；远程未发 top_p/top_k（需 ui/ 配字段，找 Qoder 对齐）
+- [@opencode] fix/m2-sampling-params M2 采样参数不支持 seed/repeat/presence/frequency penalty；远程未发 top_p/top_k（需 ui/ 配字段，找 Qoder 对齐）
 - [x] M3 `StreamAssembler.applyJson` tool_calls index 回退缺陷；name 重复追加 — **已修复**（PR #15, merge 4e4edc1）
 - [x] M4 `ToolCallParser.parseReact` 按行号配对错位 — **已修复**（PR #16, merge 156f743）
 - [x] M5 `SettingsStore.llmConfig()` 在 getter 里做密钥迁移，有写盘副作用 — **已修复**（PR #32, merge 3020c03；`llmConfig()`/`profiles()` 纯读取，`migrateLegacySecretsIfNeeded()` 抽到 `SecretMigrator`）

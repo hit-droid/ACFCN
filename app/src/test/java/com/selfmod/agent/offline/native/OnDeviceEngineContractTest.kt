@@ -25,6 +25,12 @@ class OnDeviceEngineContractTest {
         var cancelled = false
         var unloaded = false
         var lastMessages: List<Pair<String, String>> = emptyList()
+        var lastTopK: Int = -1
+        var lastTopP: Float = -1f
+        var lastSeed: Long = 0L
+        var lastRepeat: Float = -1f
+        var lastPresence: Float = -1f
+        var lastFrequency: Float = -1f
 
         override fun isLoaded(): Boolean = loaded
         override fun unload() { unloaded = true; loaded = false }
@@ -37,10 +43,20 @@ class OnDeviceEngineContractTest {
             temperature: Float,
             topK: Int,
             topP: Float,
+            seed: Long,
+            repeatPenalty: Float,
+            presencePenalty: Float,
+            frequencyPenalty: Float,
             onToken: OnDeviceEngine.TokenCallback?,
         ): Int {
             if (!loaded) return -1
             lastMessages = messages
+            lastTopK = topK
+            lastTopP = topP
+            lastSeed = seed
+            lastRepeat = repeatPenalty
+            lastPresence = presencePenalty
+            lastFrequency = frequencyPenalty
             if (cancelled) return -98
             var n = 0
             for (piece in reply.chunked(2)) {
@@ -67,7 +83,12 @@ class OnDeviceEngineContractTest {
     fun chatBeforeLoadReportsNotLoaded() {
         val e = FakeEngine()
         // -1 is the documented "not loaded" code both engines return.
-        assertEquals(-1, e.chat(listOf("user" to "hi"), 16, 0.7f, 40, 0.95f, null))
+        assertEquals(-1, e.chat(
+            listOf("user" to "hi"),
+            maxTokens = 16, temperature = 0.7f, topK = 40, topP = 0.95f,
+            seed = -1L, repeatPenalty = 1.0f, presencePenalty = 0.0f, frequencyPenalty = 0.0f,
+            onToken = null,
+        ))
     }
 
     @Test
@@ -80,6 +101,10 @@ class OnDeviceEngineContractTest {
             temperature = 0.7f,
             topK = 40,
             topP = 0.95f,
+            seed = -1L,
+            repeatPenalty = 1.0f,
+            presencePenalty = 0.0f,
+            frequencyPenalty = 0.0f,
             onToken = object : OnDeviceEngine.TokenCallback {
                 override fun onToken(piece: String): Boolean { got.append(piece); return true }
             },
@@ -91,7 +116,12 @@ class OnDeviceEngineContractTest {
     @Test
     fun cancelledGenerationReportsCancelCode() {
         val e = FakeEngine().apply { loaded = true; cancelled = true }
-        assertEquals(-98, e.chat(listOf("user" to "hi"), 16, 0.7f, 40, 0.95f, null))
+        assertEquals(-98, e.chat(
+            listOf("user" to "hi"),
+            maxTokens = 16, temperature = 0.7f, topK = 40, topP = 0.95f,
+            seed = -1L, repeatPenalty = 1.0f, presencePenalty = 0.0f, frequencyPenalty = 0.0f,
+            onToken = null,
+        ))
     }
 
     @Test
@@ -104,6 +134,10 @@ class OnDeviceEngineContractTest {
             temperature = 0.7f,
             topK = 40,
             topP = 0.95f,
+            seed = -1L,
+            repeatPenalty = 1.0f,
+            presencePenalty = 0.0f,
+            frequencyPenalty = 0.0f,
             onToken = object : OnDeviceEngine.TokenCallback {
                 override fun onToken(piece: String): Boolean { seen++; return false }
             },
@@ -137,11 +171,42 @@ class OnDeviceEngineContractTest {
     fun messagesKeepRolesForTemplateApplication() {
         val e = FakeEngine().apply { loaded = true }
         e.chat(
-            listOf("system" to "be brief", "user" to "hi"),
-            16, 0.7f, 40, 0.95f, null,
+            messages = listOf("system" to "be brief", "user" to "hi"),
+            maxTokens = 16,
+            temperature = 0.7f,
+            topK = 40,
+            topP = 0.95f,
+            seed = -1L,
+            repeatPenalty = 1.0f,
+            presencePenalty = 0.0f,
+            frequencyPenalty = 0.0f,
+            onToken = null,
         )
         // Roles must survive: llama.cpp resolves a template family, MNN renders
         // the jinja template from config.json — both need the real role names.
         assertEquals(listOf("system", "user"), e.lastMessages.map { it.first })
+    }
+
+    @Test
+    fun chatForwardsSamplingKnobs() {
+        val e = FakeEngine().apply { loaded = true }
+        e.chat(
+            messages = listOf("user" to "hi"),
+            maxTokens = 16,
+            temperature = 0.3f,
+            topK = 12,
+            topP = 0.5f,
+            seed = 7L,
+            repeatPenalty = 1.2f,
+            presencePenalty = 0.3f,
+            frequencyPenalty = 0.1f,
+            onToken = null,
+        )
+        assertEquals(12, e.lastTopK)
+        assertEquals(0.5f, e.lastTopP, 0.0f)
+        assertEquals(7L, e.lastSeed)
+        assertEquals(1.2f, e.lastRepeat, 0.0f)
+        assertEquals(0.3f, e.lastPresence, 0.0f)
+        assertEquals(0.1f, e.lastFrequency, 0.0f)
     }
 }

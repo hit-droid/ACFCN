@@ -45,6 +45,10 @@ interface OnDeviceEngine {
         temperature: Float = 0.7f,
         topK: Int = 40,
         topP: Float = 0.95f,
+        seed: Long = -1L,
+        repeatPenalty: Float = 1.0f,
+        presencePenalty: Float = 0.0f,
+        frequencyPenalty: Float = 0.0f,
         onToken: TokenCallback? = null,
     ): Int
 
