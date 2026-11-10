@@ -120,6 +120,10 @@ class MnnLlmEngine : OnDeviceEngine {
         temperature: Float,
         topK: Int,
         topP: Float,
+        seed: Long,
+        repeatPenalty: Float,
+        presencePenalty: Float,
+        frequencyPenalty: Float,
         onToken: OnDeviceEngine.TokenCallback?,
     ): Int {
         if (!isLoaded()) {
@@ -130,7 +134,7 @@ class MnnLlmEngine : OnDeviceEngine {
         val contents = messages.map { it.second }.toTypedArray()
         com.selfmod.agent.util.Diagnostics.log(
             "mnn",
-            "chat: msgs=${messages.size} maxTokens=$maxTokens temp=$temperature topK=$topK",
+            "chat: msgs=${messages.size} maxTokens=$maxTokens temp=$temperature topK=$topK topP=$topP seed=$seed",
         )
         val first = java.util.concurrent.atomic.AtomicBoolean(true)
         val t0 = System.currentTimeMillis()
@@ -154,7 +158,10 @@ class MnnLlmEngine : OnDeviceEngine {
         // MNN has no native USER_CANCEL; the abort flag is polled between
         // decode steps natively, and the watchdog aborts through nativeCancel().
         val code = IdleWatchdog.run(120_000, lastTokenAt, aborted, { nativeCancel() }) {
-            nativeChat(roles, contents, maxTokens, temperature, topK, topP, wrapped)
+            nativeChat(
+                roles, contents, maxTokens, temperature, topK, topP,
+                seed, repeatPenalty, presencePenalty, frequencyPenalty, wrapped,
+            )
         }
         val n = emitted.get()
         com.selfmod.agent.util.Diagnostics.log(
@@ -179,6 +186,7 @@ class MnnLlmEngine : OnDeviceEngine {
     private external fun nativeChat(
         roles: Array<String>, contents: Array<String>,
         maxTokens: Int, temperature: Float, topK: Int, topP: Float,
+        seed: Long, repeatPenalty: Float, presencePenalty: Float, frequencyPenalty: Float,
         callback: OnDeviceEngine.TokenCallback?,
     ): Int
     private external fun nativeChatTemplate(): String

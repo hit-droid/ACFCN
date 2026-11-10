@@ -13,6 +13,15 @@ data class LlmConfig(
     // L1: 2048 at on-device speeds (5-15 tok/s) means minutes of generation
     // per answer; 512 keeps replies snappy. Users can raise it in config.
     val maxTokens: Int = 512,
+    // M2: sampling knobs. Defaults match the on-device engine so old
+    // saved configs keep the same generation behaviour.
+    val topP: Double = 0.95,
+    val topK: Int = 40,
+    // -1 = random (llama.cpp LLAMA_DEFAULT_SEED).
+    val seed: Long = -1L,
+    val repeatPenalty: Double = 1.0,
+    val presencePenalty: Double = 0.0,
+    val frequencyPenalty: Double = 0.0,
     val timeoutSeconds: Long = 120,
     val kind: String = KIND_CLOUD,
     val profileName: String = "",

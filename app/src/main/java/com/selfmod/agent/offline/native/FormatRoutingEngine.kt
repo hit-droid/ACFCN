@@ -31,10 +31,17 @@ class FormatRoutingEngine(
         temperature: Float,
         topK: Int,
         topP: Float,
+        seed: Long,
+        repeatPenalty: Float,
+        presencePenalty: Float,
+        frequencyPenalty: Float,
         onToken: OnDeviceEngine.TokenCallback?,
     ): Int {
         val engine = engines.active ?: return -1
-        return engine.chat(messages, maxTokens, temperature, topK, topP, onToken)
+        return engine.chat(
+            messages, maxTokens, temperature, topK, topP,
+            seed, repeatPenalty, presencePenalty, frequencyPenalty, onToken,
+        )
     }
 
     /** The loaded model's context window; 0 when idle. */

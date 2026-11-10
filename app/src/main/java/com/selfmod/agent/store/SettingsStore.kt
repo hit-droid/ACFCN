@@ -179,6 +179,12 @@ class SettingsStore(context: Context) {
         put("model", cfg.model)
         put("temperature", cfg.temperature)
         put("maxTokens", cfg.maxTokens)
+        put("topP", cfg.topP)
+        put("topK", cfg.topK)
+        put("seed", cfg.seed)
+        put("repeatPenalty", cfg.repeatPenalty)
+        put("presencePenalty", cfg.presencePenalty)
+        put("frequencyPenalty", cfg.frequencyPenalty)
         put("timeoutSeconds", cfg.timeoutSeconds)
         put("kind", cfg.kind)
         put("profileName", cfg.profileName)
@@ -197,6 +203,12 @@ class SettingsStore(context: Context) {
                 model = o.optString("model", LlmConfig.DEFAULT.model),
                 temperature = o.optDouble("temperature", LlmConfig.DEFAULT.temperature),
                 maxTokens = o.optInt("maxTokens", LlmConfig.DEFAULT.maxTokens),
+                topP = o.optDouble("topP", LlmConfig.DEFAULT.topP),
+                topK = o.optInt("topK", LlmConfig.DEFAULT.topK),
+                seed = o.optLong("seed", LlmConfig.DEFAULT.seed),
+                repeatPenalty = o.optDouble("repeatPenalty", LlmConfig.DEFAULT.repeatPenalty),
+                presencePenalty = o.optDouble("presencePenalty", LlmConfig.DEFAULT.presencePenalty),
+                frequencyPenalty = o.optDouble("frequencyPenalty", LlmConfig.DEFAULT.frequencyPenalty),
                 timeoutSeconds = o.optLong("timeoutSeconds", LlmConfig.DEFAULT.timeoutSeconds),
                 kind = o.optString("kind", LlmConfig.KIND_CLOUD),
                 profileName = o.optString("profileName", ""),

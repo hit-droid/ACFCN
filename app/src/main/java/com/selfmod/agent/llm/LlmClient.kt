@@ -90,6 +90,12 @@ class LlmClient(
             messages = pairs,
             maxTokens = config.maxTokens,
             temperature = config.temperature.toFloat(),
+            topK = config.topK,
+            topP = config.topP.toFloat(),
+            seed = config.seed,
+            repeatPenalty = config.repeatPenalty.toFloat(),
+            presencePenalty = config.presencePenalty.toFloat(),
+            frequencyPenalty = config.frequencyPenalty.toFloat(),
             onToken = object : OnDeviceEngine.TokenCallback {
                 override fun onToken(piece: String): Boolean {
                     sb.append(piece)
@@ -179,12 +185,7 @@ class LlmClient(
             .put("model", config.model.ifBlank { "llama3.2" })
             .put("stream", streaming)
             .put("messages", msgs)
-            .put(
-                "options",
-                JSONObject()
-                    .put("temperature", config.temperature)
-                    .put("num_predict", config.maxTokens),
-            )
+            .put("options", SamplingPayload.ollama(config))
         if (tools.isNotEmpty()) {
             val arr = JSONArray()
             tools.forEach { t ->
@@ -278,10 +279,8 @@ class LlmClient(
         val root = config.baseUrl.trimEnd('/').removeSuffix("/v1")
         val prompt = messages.joinToString("\n") { "${it.role}: ${it.content}" } + "\nassistant:"
         val streaming = onDelta != null
-        val body = JSONObject()
+        val body = SamplingPayload.llamaCpp(config)
             .put("prompt", prompt)
-            .put("n_predict", config.maxTokens)
-            .put("temperature", config.temperature)
             .put("stream", streaming)
             .toString()
         val req = request(config, "$root/completion", body)
@@ -351,10 +350,8 @@ class LlmClient(
         tools: List<ToolSpec>,
         stream: Boolean,
     ): JSONObject {
-        val root = JSONObject()
+        val root = SamplingPayload.openAi(config)
         root.put("model", config.model)
-        root.put("temperature", config.temperature)
-        root.put("max_tokens", config.maxTokens)
         root.put("stream", stream)
 
         val msgs = JSONArray()

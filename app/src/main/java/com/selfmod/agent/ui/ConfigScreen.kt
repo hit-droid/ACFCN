@@ -52,6 +52,12 @@ fun ConfigScreen(vm: AgentViewModel) {
     var model by remember { mutableStateOf(initial.model) }
     var tempStr by remember { mutableStateOf(initial.temperature.toString()) }
     var maxTokStr by remember { mutableStateOf(initial.maxTokens.toString()) }
+    var topPStr by remember { mutableStateOf(initial.topP.toString()) }
+    var topKStr by remember { mutableStateOf(initial.topK.toString()) }
+    var seedStr by remember { mutableStateOf(if (initial.seed < 0) "" else initial.seed.toString()) }
+    var repeatStr by remember { mutableStateOf(initial.repeatPenalty.toString()) }
+    var presenceStr by remember { mutableStateOf(initial.presencePenalty.toString()) }
+    var frequencyStr by remember { mutableStateOf(initial.frequencyPenalty.toString()) }
     var kind by remember { mutableStateOf(initial.kind) }
     var nativeTools by remember { mutableStateOf(initial.supportsNativeTools) }
     var showKey by remember { mutableStateOf(false) }
@@ -72,6 +78,12 @@ fun ConfigScreen(vm: AgentViewModel) {
         model = model.trim(),
         temperature = tempStr.trim().toDoubleOrNull() ?: 0.6,
         maxTokens = maxTokStr.trim().toIntOrNull() ?: 512,
+        topP = topPStr.trim().toDoubleOrNull() ?: 0.95,
+        topK = topKStr.trim().toIntOrNull() ?: 40,
+        seed = seedStr.trim().toLongOrNull() ?: -1L,
+        repeatPenalty = repeatStr.trim().toDoubleOrNull() ?: 1.0,
+        presencePenalty = presenceStr.trim().toDoubleOrNull() ?: 0.0,
+        frequencyPenalty = frequencyStr.trim().toDoubleOrNull() ?: 0.0,
         kind = kind,
         profileName = profileName.trim(),
         supportsNativeTools = nativeTools,
@@ -160,6 +172,52 @@ fun ConfigScreen(vm: AgentViewModel) {
                 value = maxTokStr,
                 onValueChange = { maxTokStr = it; saved = false },
                 label = { Text("max_tokens") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = topPStr,
+                onValueChange = { topPStr = it; saved = false },
+                label = { Text("top_p") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = topKStr,
+                onValueChange = { topKStr = it; saved = false },
+                label = { Text("top_k") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = seedStr,
+                onValueChange = { seedStr = it; saved = false },
+                label = { Text("seed（空=随机）") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = repeatStr,
+                onValueChange = { repeatStr = it; saved = false },
+                label = { Text("repeat_penalty") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = presenceStr,
+                onValueChange = { presenceStr = it; saved = false },
+                label = { Text("presence_penalty") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = frequencyStr,
+                onValueChange = { frequencyStr = it; saved = false },
+                label = { Text("frequency_penalty") },
                 modifier = Modifier.weight(1f),
                 singleLine = true,
             )
@@ -263,6 +321,11 @@ fun ConfigScreen(vm: AgentViewModel) {
                             val c = vm.config()
                             baseUrl = c.baseUrl; apiKey = c.apiKey; model = c.model
                             tempStr = c.temperature.toString(); maxTokStr = c.maxTokens.toString()
+                            topPStr = c.topP.toString(); topKStr = c.topK.toString()
+                            seedStr = if (c.seed < 0) "" else c.seed.toString()
+                            repeatStr = c.repeatPenalty.toString()
+                            presenceStr = c.presencePenalty.toString()
+                            frequencyStr = c.frequencyPenalty.toString()
                             kind = c.kind; nativeTools = c.supportsNativeTools
                             profileName = p.name
                             saved = true

@@ -129,6 +129,19 @@ class LlmConfigTest {
         assertEquals(512, LlmConfig().maxTokens)
     }
 
+    // M2: sampling defaults match the on-device engine so unsaved configs
+    // keep the same generation behaviour as before this field existed.
+    @Test
+    fun samplingDefaultsMatchOnDeviceEngine() {
+        val cfg = LlmConfig()
+        assertEquals(0.95, cfg.topP, 0.0)
+        assertEquals(40, cfg.topK)
+        assertEquals(-1L, cfg.seed)
+        assertEquals(1.0, cfg.repeatPenalty, 0.0)
+        assertEquals(0.0, cfg.presencePenalty, 0.0)
+        assertEquals(0.0, cfg.frequencyPenalty, 0.0)
+    }
+
     @Test
     fun privateRangesAreLocal() {
         // 172.17–172.31 此前被旧的 startsWith("172.16.") 漏判。

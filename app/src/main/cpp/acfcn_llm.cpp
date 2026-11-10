@@ -1007,7 +1007,9 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeClearAbort(
 static jint generate_impl(
         JNIEnv *env, jobject callback,
         const std::string &prompt,
-        jint maxTokens, jfloat temperature, jint topK, jfloat topP) {
+        jint maxTokens, jfloat temperature, jint topK, jfloat topP,
+        jlong seed, jfloat repeatPenalty, jfloat presencePenalty,
+        jfloat frequencyPenalty) {
 
     llama_context *ctx = nullptr;
     const llama_vocab *vocab = nullptr;
@@ -1127,10 +1129,20 @@ static jint generate_impl(
 
     llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
     llama_sampler *smpl = llama_sampler_chain_init(sparams);
+    // M2: penalties first (they rewrite logits), then top-k / top-p / temp,
+    // then the discrete sampler. seed < 0 keeps llama.cpp's random default.
+    const float rp = repeatPenalty > 0.0f ? (float) repeatPenalty : 1.0f;
+    const bool use_penalties = rp != 1.0f || presencePenalty != 0.0f || frequencyPenalty != 0.0f;
+    if (use_penalties) {
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+                n_vocab, 64, rp, frequencyPenalty, presencePenalty));
+    }
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(topK));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(topP, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    const uint32_t smpl_seed = seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t) seed;
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(smpl_seed));
 
     int emitted = 0;
     std::string piece_buf;
@@ -1304,7 +1316,8 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeChat(
         JNIEnv *env, jobject /*thiz*/, jstring templateJ, jobjectArray roles,
         jobjectArray contents, jint maxTokens, jfloat temperature, jint topK,
-        jfloat topP, jobject callback) {
+        jfloat topP, jlong seed, jfloat repeatPenalty, jfloat presencePenalty,
+        jfloat frequencyPenalty, jobject callback) {
     std::string tmpl = jstr(env, templateJ);
     jsize n = env->GetArrayLength(roles);
 
@@ -1339,7 +1352,8 @@ Java_com_selfmod_agent_offline_native_LocalLlmEngine_nativeChat(
     }
     std::string prompt(out.data(), written);
 
-    return generate_impl(env, callback, prompt, maxTokens, temperature, topK, topP);
+    return generate_impl(env, callback, prompt, maxTokens, temperature, topK, topP,
+                         seed, repeatPenalty, presencePenalty, frequencyPenalty);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

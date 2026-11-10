@@ -236,7 +236,8 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
         JNIEnv *env, jobject, jobjectArray roles,
         jobjectArray contents, jint maxTokens, jfloat temperature, jint topK,
-        jfloat topP, jobject callback) {
+        jfloat topP, jlong seed, jfloat repeatPenalty, jfloat presencePenalty,
+        jfloat frequencyPenalty, jobject callback) {
     Llm *llm = nullptr;
     {
         // Hold the engine mutex only long enough to check readiness and mark an
@@ -272,6 +273,23 @@ Java_com_selfmod_agent_offline_native_MnnLlmEngine_nativeChat(
     }
 
     int tn = maxTokens > 0 ? (int) maxTokens : 1024;
+    // M2: apply sampling at chat time so a config change takes effect
+    // without reloading. MNN 3.6.1 understands temperature / topK / topP /
+    // penalty; seed / presence / frequency have no matching keys and are
+    // accepted only to keep the JNI signature aligned with llama.cpp.
+    (void) seed;
+    (void) presencePenalty;
+    (void) frequencyPenalty;
+    {
+        char samp[512];
+        const float rp = repeatPenalty > 0.0f ? (float) repeatPenalty : 1.0f;
+        snprintf(samp, sizeof(samp),
+                 R"({"temperature":%.4f,"topK":%d,"topP":%.4f,"penalty":%.4f})",
+                 (double) temperature, (int) topK, (double) topP, (double) rp);
+        if (!llm->set_config(samp)) {
+            LOGI("mnn sampling set_config ignored: %s", samp);
+        }
+    }
 
     jobject cb = callback;
     jmethodID mid = nullptr;
