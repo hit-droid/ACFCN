@@ -4,7 +4,7 @@
 
 ## 占用登记（进行中）
 
-- [opencode] `fix/m2-sampling-params` | `llm/LlmConfig.kt`, `llm/LlmClient.kt`, `store/SettingsStore.kt`, `ui/ConfigScreen.kt`, `offline/native/*`, `cpp/acfcn_llm.cpp`, `cpp/mnn_llm.cpp` | 2026-11-08 | M2 采样参数 | **ui/ 是 Qoder 领域，仅改 ConfigScreen 采样字段，已在此登记知会**；store/ 轮流先登记。不碰 browser/、agent/
+- [opencode] `fix/m2-sampling-params` PR #95 | `llm/LlmConfig.kt`, `llm/LlmClient.kt`, `store/SettingsStore.kt`, `ui/ConfigScreen.kt`, `offline/native/*`, `cpp/acfcn_llm.cpp`, `cpp/mnn_llm.cpp` | 2026-11-10 | M2 采样参数 | 本地 260/260 + assembleDebug 绿，待 CI；**ui/ 是 Qoder 领域，仅改 ConfigScreen 采样字段**
 
 ## 留言区（最新在上）
 
